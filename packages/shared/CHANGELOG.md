@@ -1,4 +1,4 @@
-# @paperclipai/shared
+# @wisechef-ai/shared
 
 ## 0.2.7
 

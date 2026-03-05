@@ -156,7 +156,7 @@ function buildJoinConnectivityDiagnostics(input: {
         code: "openclaw_private_bind_not_allowed",
         level: "warn",
         message: `Paperclip bind host \"${bindHost}\" is not in allowed hostnames.`,
-        hint: `Run pnpm paperclipai allowed-hostname ${bindHost}`,
+        hint: `Run pnpm wisechef-ai allowed-hostname ${bindHost}`,
       });
     }
     if (callbackHost && !isLoopbackHost(callbackHost) && allowSet.size === 0) {
@@ -164,7 +164,7 @@ function buildJoinConnectivityDiagnostics(input: {
         code: "openclaw_private_allowed_hostnames_empty",
         level: "warn",
         message: "No explicit allowed hostnames are configured for authenticated/private mode.",
-        hint: "Set one with pnpm paperclipai allowed-hostname <host> when OpenClaw runs off-host.",
+        hint: "Set one with pnpm wisechef-ai allowed-hostname <host> when OpenClaw runs off-host.",
       });
     }
   }
@@ -368,7 +368,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_host_not_allowed",
       level: "warn",
       message: `Onboarding host "${apiHost}" is not in allowed hostnames for authenticated/private mode.`,
-      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`,
+      hint: `Run pnpm wisechef-ai allowed-hostname ${apiHost}`,
     });
   }
 
@@ -435,7 +435,7 @@ function buildInviteOnboardingManifest(
         diagnostics: discoveryDiagnostics,
         guidance:
           opts.deploymentMode === "authenticated" && opts.deploymentExposure === "private"
-            ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm paperclipai allowed-hostname <host>`."
+            ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm wisechef-ai allowed-hostname <host>`."
             : "Ensure OpenClaw can reach this Paperclip API base URL for callbacks and claims.",
       },
       textInstructions: {

@@ -1,4 +1,4 @@
-# paperclipai
+# wisechef-ai
 
 ## 0.2.7
 
@@ -6,13 +6,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.7
-  - @paperclipai/adapter-utils@0.2.7
-  - @paperclipai/db@0.2.7
-  - @paperclipai/adapter-claude-local@0.2.7
-  - @paperclipai/adapter-codex-local@0.2.7
-  - @paperclipai/adapter-openclaw@0.2.7
-  - @paperclipai/server@0.2.7
+  - @wisechef-ai/shared@0.2.7
+  - @wisechef-ai/adapter-utils@0.2.7
+  - @wisechef-ai/db@0.2.7
+  - @wisechef-ai/adapter-claude-local@0.2.7
+  - @wisechef-ai/adapter-codex-local@0.2.7
+  - @wisechef-ai/adapter-openclaw@0.2.7
+  - @wisechef-ai/server@0.2.7
 
 ## 0.2.6
 
@@ -20,13 +20,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.6
-  - @paperclipai/adapter-utils@0.2.6
-  - @paperclipai/db@0.2.6
-  - @paperclipai/adapter-claude-local@0.2.6
-  - @paperclipai/adapter-codex-local@0.2.6
-  - @paperclipai/adapter-openclaw@0.2.6
-  - @paperclipai/server@0.2.6
+  - @wisechef-ai/shared@0.2.6
+  - @wisechef-ai/adapter-utils@0.2.6
+  - @wisechef-ai/db@0.2.6
+  - @wisechef-ai/adapter-claude-local@0.2.6
+  - @wisechef-ai/adapter-codex-local@0.2.6
+  - @wisechef-ai/adapter-openclaw@0.2.6
+  - @wisechef-ai/server@0.2.6
 
 ## 0.2.5
 
@@ -34,13 +34,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.5
-  - @paperclipai/adapter-utils@0.2.5
-  - @paperclipai/db@0.2.5
-  - @paperclipai/adapter-claude-local@0.2.5
-  - @paperclipai/adapter-codex-local@0.2.5
-  - @paperclipai/adapter-openclaw@0.2.5
-  - @paperclipai/server@0.2.5
+  - @wisechef-ai/shared@0.2.5
+  - @wisechef-ai/adapter-utils@0.2.5
+  - @wisechef-ai/db@0.2.5
+  - @wisechef-ai/adapter-claude-local@0.2.5
+  - @wisechef-ai/adapter-codex-local@0.2.5
+  - @wisechef-ai/adapter-openclaw@0.2.5
+  - @wisechef-ai/server@0.2.5
 
 ## 0.2.4
 
@@ -48,13 +48,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.4
-  - @paperclipai/adapter-utils@0.2.4
-  - @paperclipai/db@0.2.4
-  - @paperclipai/adapter-claude-local@0.2.4
-  - @paperclipai/adapter-codex-local@0.2.4
-  - @paperclipai/adapter-openclaw@0.2.4
-  - @paperclipai/server@0.2.4
+  - @wisechef-ai/shared@0.2.4
+  - @wisechef-ai/adapter-utils@0.2.4
+  - @wisechef-ai/db@0.2.4
+  - @wisechef-ai/adapter-claude-local@0.2.4
+  - @wisechef-ai/adapter-codex-local@0.2.4
+  - @wisechef-ai/adapter-openclaw@0.2.4
+  - @wisechef-ai/server@0.2.4
 
 ## 0.2.3
 
@@ -62,13 +62,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.3
-  - @paperclipai/adapter-utils@0.2.3
-  - @paperclipai/db@0.2.3
-  - @paperclipai/adapter-claude-local@0.2.3
-  - @paperclipai/adapter-codex-local@0.2.3
-  - @paperclipai/adapter-openclaw@0.2.3
-  - @paperclipai/server@0.2.3
+  - @wisechef-ai/shared@0.2.3
+  - @wisechef-ai/adapter-utils@0.2.3
+  - @wisechef-ai/db@0.2.3
+  - @wisechef-ai/adapter-claude-local@0.2.3
+  - @wisechef-ai/adapter-codex-local@0.2.3
+  - @wisechef-ai/adapter-openclaw@0.2.3
+  - @wisechef-ai/server@0.2.3
 
 ## 0.2.2
 
@@ -76,13 +76,13 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.2
-  - @paperclipai/adapter-utils@0.2.2
-  - @paperclipai/db@0.2.2
-  - @paperclipai/adapter-claude-local@0.2.2
-  - @paperclipai/adapter-codex-local@0.2.2
-  - @paperclipai/adapter-openclaw@0.2.2
-  - @paperclipai/server@0.2.2
+  - @wisechef-ai/shared@0.2.2
+  - @wisechef-ai/adapter-utils@0.2.2
+  - @wisechef-ai/db@0.2.2
+  - @wisechef-ai/adapter-claude-local@0.2.2
+  - @wisechef-ai/adapter-codex-local@0.2.2
+  - @wisechef-ai/adapter-openclaw@0.2.2
+  - @wisechef-ai/server@0.2.2
 
 ## 0.2.1
 
@@ -90,10 +90,10 @@
 
 - Version bump (patch)
 - Updated dependencies
-  - @paperclipai/shared@0.2.1
-  - @paperclipai/adapter-utils@0.2.1
-  - @paperclipai/db@0.2.1
-  - @paperclipai/adapter-claude-local@0.2.1
-  - @paperclipai/adapter-codex-local@0.2.1
-  - @paperclipai/adapter-openclaw@0.2.1
-  - @paperclipai/server@0.2.1
+  - @wisechef-ai/shared@0.2.1
+  - @wisechef-ai/adapter-utils@0.2.1
+  - @wisechef-ai/db@0.2.1
+  - @wisechef-ai/adapter-claude-local@0.2.1
+  - @wisechef-ai/adapter-codex-local@0.2.1
+  - @wisechef-ai/adapter-openclaw@0.2.1
+  - @wisechef-ai/server@0.2.1

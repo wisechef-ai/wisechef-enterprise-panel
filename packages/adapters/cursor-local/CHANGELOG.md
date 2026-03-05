@@ -1,4 +1,4 @@
-# @paperclipai/adapter-cursor-local
+# @wisechef-ai/adapter-cursor-local
 
 ## 0.2.7
 

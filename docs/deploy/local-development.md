@@ -1,9 +1,9 @@
 ---
 title: Local Development
-summary: Set up Paperclip for local development
+summary: Set up WiseChef Panel for local development
 ---
 
-Run Paperclip locally with zero external dependencies.
+Run WiseChef Panel locally with zero external dependencies.
 
 ## Prerequisites
 
@@ -22,20 +22,20 @@ This starts:
 - **API server** at `http://localhost:3100`
 - **UI** served by the API server in dev middleware mode (same origin)
 
-No Docker or external database required. Paperclip uses embedded PostgreSQL automatically.
+No Docker or external database required. WiseChef Panel uses embedded PostgreSQL automatically.
 
 ## One-Command Bootstrap
 
 For a first-time install:
 
 ```sh
-pnpm paperclipai run
+pnpm wisechef-ai run
 ```
 
 This does:
 
 1. Auto-onboards if config is missing
-2. Runs `paperclipai doctor` with repair enabled
+2. Runs `wisechef-ai doctor` with repair enabled
 3. Starts the server when checks pass
 
 ## Tailscale/Private Auth Dev Mode
@@ -51,7 +51,7 @@ This binds the server to `0.0.0.0` for private-network access.
 Allow additional private hostnames:
 
 ```sh
-pnpm paperclipai allowed-hostname dotta-macbook-pro
+pnpm wisechef-ai allowed-hostname dotta-macbook-pro
 ```
 
 ## Health Checks
@@ -86,5 +86,5 @@ pnpm dev
 Override with environment variables:
 
 ```sh
-PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
+PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm wisechef-ai run
 ```

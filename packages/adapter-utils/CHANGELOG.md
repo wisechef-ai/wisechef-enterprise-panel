@@ -1,4 +1,4 @@
-# @paperclipai/adapter-utils
+# @wisechef-ai/adapter-utils
 
 ## 0.2.7
 

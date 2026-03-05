@@ -115,7 +115,7 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
 export const PROJECT_COLORS = [
   "#6366f1", // indigo
-  "#8b5cf6", // violet
+  "#f07040", // violet
   "#ec4899", // pink
   "#ef4444", // red
   "#f97316", // orange

@@ -40,7 +40,7 @@ This runs dev as `authenticated/private` and binds the server to `0.0.0.0` for p
 Allow additional private hostnames (for example custom Tailscale hostnames):
 
 ```sh
-pnpm paperclipai allowed-hostname dotta-macbook-pro
+pnpm wisechef-ai allowed-hostname dotta-macbook-pro
 ```
 
 ## One-Command Local Run
@@ -48,18 +48,18 @@ pnpm paperclipai allowed-hostname dotta-macbook-pro
 For a first-time local install, you can bootstrap and run in one command:
 
 ```sh
-pnpm paperclipai run
+pnpm wisechef-ai run
 ```
 
-`paperclipai run` does:
+`wisechef-ai run` does:
 
 1. auto-onboard if config is missing
-2. `paperclipai doctor` with repair enabled
+2. `wisechef-ai doctor` with repair enabled
 3. starts the server when checks pass
 
 ## Docker Quickstart (No local Node install)
 
-Build and run Paperclip in Docker:
+Build and run WiseChef Panel in Docker:
 
 ```sh
 docker build -t paperclip-local .
@@ -89,7 +89,7 @@ The server will automatically use embedded PostgreSQL and persist data at:
 Override home and instance:
 
 ```sh
-PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm paperclipai run
+PAPERCLIP_HOME=/custom/path PAPERCLIP_INSTANCE_ID=dev pnpm wisechef-ai run
 ```
 
 No Docker or external database is required for this mode.
@@ -103,12 +103,12 @@ For local development, the default storage provider is `local_disk`, which persi
 Configure storage provider/settings:
 
 ```sh
-pnpm paperclipai configure --section storage
+pnpm wisechef-ai configure --section storage
 ```
 
 ## Default Agent Workspaces
 
-When a local agent run has no resolved project/session workspace, Paperclip falls back to an agent home workspace under the instance root:
+When a local agent run has no resolved project/session workspace, WiseChef Panel falls back to an agent home workspace under the instance root:
 
 - `~/.paperclip/instances/default/workspaces/<agent-id>`
 
@@ -143,7 +143,7 @@ If you set `DATABASE_URL`, the server will use that instead of embedded PostgreS
 
 ## Automatic DB Backups
 
-Paperclip can run automatic DB backups on a timer. Defaults:
+WiseChef Panel can run automatic DB backups on a timer. Defaults:
 
 - enabled
 - every 60 minutes
@@ -153,13 +153,13 @@ Paperclip can run automatic DB backups on a timer. Defaults:
 Configure these in:
 
 ```sh
-pnpm paperclipai configure --section database
+pnpm wisechef-ai configure --section database
 ```
 
 Run a one-off backup manually:
 
 ```sh
-pnpm paperclipai db:backup
+pnpm wisechef-ai db:backup
 # or:
 pnpm db:backup
 ```
@@ -189,9 +189,9 @@ When strict mode is enabled, sensitive env keys (for example `*_API_KEY`, `*_TOK
 
 CLI configuration support:
 
-- `pnpm paperclipai onboard` writes a default `secrets` config section (`local_encrypted`, strict mode off, key file path set) and creates a local key file when needed.
-- `pnpm paperclipai configure --section secrets` lets you update provider/strict mode/key path and creates the local key file when needed.
-- `pnpm paperclipai doctor` validates secrets adapter configuration and can create a missing local key file with `--repair`.
+- `pnpm wisechef-ai onboard` writes a default `secrets` config section (`local_encrypted`, strict mode off, key file path set) and creates a local key file when needed.
+- `pnpm wisechef-ai configure --section secrets` lets you update provider/strict mode/key path and creates the local key file when needed.
+- `pnpm wisechef-ai doctor` validates secrets adapter configuration and can create a missing local key file with `--repair`.
 
 Migration helper for existing inline env secrets:
 
@@ -215,27 +215,27 @@ Default behavior:
 
 ## CLI Client Operations
 
-Paperclip CLI now includes client-side control-plane commands in addition to setup commands.
+WiseChef Panel CLI now includes client-side control-plane commands in addition to setup commands.
 
 Quick examples:
 
 ```sh
-pnpm paperclipai issue list --company-id <company-id>
-pnpm paperclipai issue create --company-id <company-id> --title "Investigate checkout conflict"
-pnpm paperclipai issue update <issue-id> --status in_progress --comment "Started triage"
+pnpm wisechef-ai issue list --company-id <company-id>
+pnpm wisechef-ai issue create --company-id <company-id> --title "Investigate checkout conflict"
+pnpm wisechef-ai issue update <issue-id> --status in_progress --comment "Started triage"
 ```
 
 Set defaults once with context profiles:
 
 ```sh
-pnpm paperclipai context set --api-base http://localhost:3100 --company-id <company-id>
+pnpm wisechef-ai context set --api-base http://localhost:3100 --company-id <company-id>
 ```
 
 Then run commands without repeating flags:
 
 ```sh
-pnpm paperclipai issue list
-pnpm paperclipai dashboard get
+pnpm wisechef-ai issue list
+pnpm wisechef-ai dashboard get
 ```
 
 See full command reference in `doc/CLI.md`.
@@ -248,7 +248,7 @@ Agent-oriented invite onboarding now exposes machine-readable API docs:
 - `GET /api/invites/:token/onboarding` returns onboarding manifest details (registration endpoint, claim endpoint template, skill install hints).
 - `GET /api/invites/:token/onboarding.txt` returns a plain-text onboarding doc intended for both human operators and agents (llm.txt-style handoff).
 - `GET /api/skills/index` lists available skill documents.
-- `GET /api/skills/paperclip` returns the Paperclip heartbeat skill markdown.
+- `GET /api/skills/paperclip` returns the WiseChef Panel heartbeat skill markdown.
 
 ## OpenClaw Join Smoke Test
 

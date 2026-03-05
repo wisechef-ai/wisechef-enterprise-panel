@@ -65,7 +65,7 @@ function quickstartDefaults(): Pick<PaperclipConfig, "database" | "logging" | "s
 
 export async function onboard(opts: OnboardOptions): Promise<void> {
   printPaperclipCliBanner();
-  p.intro(pc.bgCyan(pc.black(" paperclipai onboard ")));
+  p.intro(pc.bgCyan(pc.black(" wisechef-ai onboard ")));
   const configPath = resolveConfigPath(opts.config);
   const instance = describeLocalInstancePaths(resolvePaperclipInstanceId());
   p.log.message(
@@ -138,7 +138,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
         await db.execute("SELECT 1");
         s.stop("Database connection successful");
       } catch {
-        s.stop(pc.yellow("Could not connect to database — you can fix this later with `paperclipai doctor`"));
+        s.stop(pc.yellow("Could not connect to database — you can fix this later with `wisechef-ai doctor`"));
       }
     }
 
@@ -261,9 +261,9 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   p.note(
     [
-      `Run: ${pc.cyan("paperclipai run")}`,
-      `Reconfigure later: ${pc.cyan("paperclipai configure")}`,
-      `Diagnose setup: ${pc.cyan("paperclipai doctor")}`,
+      `Run: ${pc.cyan("wisechef-ai run")}`,
+      `Reconfigure later: ${pc.cyan("wisechef-ai configure")}`,
+      `Diagnose setup: ${pc.cyan("wisechef-ai doctor")}`,
     ].join("\n"),
     "Next commands",
   );

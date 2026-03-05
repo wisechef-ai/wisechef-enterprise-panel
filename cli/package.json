@@ -1,7 +1,7 @@
 {
   "name": "paperclipai",
   "version": "0.2.7",
-  "description": "Paperclip CLI — orchestrate AI agent teams to run a business",
+  "description": "WiseChef Panel CLI — orchestrate AI agent teams to run a business",
   "type": "module",
   "bin": {
     "paperclipai": "./dist/index.js"
