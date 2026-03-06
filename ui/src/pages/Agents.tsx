@@ -34,6 +34,11 @@ const roleLabels: Record<string, string> = {
   ceo: "CEO", cto: "CTO", cmo: "CMO", cfo: "CFO",
   engineer: "Engineer", designer: "Designer", pm: "PM",
   qa: "QA", devops: "DevOps", researcher: "Researcher", general: "General",
+  product: "Product", growth: "Growth", sales: "Sales",
+  support: "Support", content: "Content", community: "Community",
+  partnerships: "Partnerships", hr: "HR", finance: "Finance",
+  legal: "Legal", operations: "Operations", data: "Data Analyst",
+  security: "Security", design: "Design",
 };
 
 type FilterTab = "all" | "active" | "paused" | "error";
