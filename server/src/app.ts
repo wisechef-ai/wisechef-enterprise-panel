@@ -127,6 +127,29 @@ export async function createApp(
   api.get("/usage", (_req, res) => res.json({ ok: true, usage: {} }));
   api.get("/usage-limits", (_req, res) => res.json({ ok: true, limits: {} }));
 
+  // Telegram bot token validation via BotFather API
+  api.post("/channels/validate-token", async (req, res) => {
+    try {
+      const { token, platform } = req.body as { token?: string; platform?: string };
+      if (!token || platform !== "telegram") {
+        return res.json({ valid: false, error: "Only Telegram tokens are supported" });
+      }
+      const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const data = (await resp.json()) as { ok: boolean; result?: { username?: string } };
+      if (data.ok && data.result?.username) {
+        return res.json({ valid: true, botUsername: data.result.username });
+      }
+      return res.json({ valid: false, error: "Invalid token — bot not found" });
+    } catch {
+      return res.json({ valid: false, error: "Could not validate token" });
+    }
+  });
+
+  // Tier/plan info for onboarding wizard
+  api.get("/onboarding/tier", (_req, res) => {
+    res.json({ maxAgents: 20, plan: "enterprise" });
+  });
+
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
