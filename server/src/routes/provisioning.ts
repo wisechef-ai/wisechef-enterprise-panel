@@ -216,19 +216,17 @@ export function provisioningRoutes(
       };
       await store.saveDeployment(payload.companyId, deployment);
 
-      // Update agent adapter URLs and auth to use the deployed container's hooks endpoint
-      const gatewayUrl = `https://${hostname}/hooks/paperclip`;
+      // Update agent adapter URLs and auth to use the deployed container's gateway endpoint
+      const wsGatewayUrl = `wss://${hostname}/gateway`;
       try {
-        // Read hooks token from the deployed openclaw.json
+        // Read gateway auth token from the deployed openclaw.json
         const readTokenCmd = `ssh -i '${DOCKER_SSH_KEY}' -o StrictHostKeyChecking=accept-new root@${DOCKER_HOST} "cat /opt/wisechef/clients/${payload.companySlug}/data/openclaw/openclaw.json" 2>/dev/null`;
-        let hooksToken = "";
+        let gatewayAuthToken = "";
         try {
           const tokenResult = await runCommand(readTokenCmd);
           const ocConfig = JSON.parse(tokenResult.stdout);
-          hooksToken = ocConfig?.hooks?.token ?? "";
-        } catch { /* fallback: use the default secret */ }
-
-        const authHeader = hooksToken ? `Bearer ${hooksToken}` : "Bearer wisechef-hooks-secret-2026";
+          gatewayAuthToken = ocConfig?.gateway?.auth?.token ?? "";
+        } catch { /* fallback: empty — will need manual config */ }
 
         const agentRows = await db
           .select()
@@ -238,12 +236,21 @@ export function provisioningRoutes(
           const cfg = (agent.adapterConfig as Record<string, unknown>) ?? {};
           await db
             .update(agentsTable)
-            .set({ adapterConfig: { ...cfg, url: gatewayUrl, webhookAuthHeader: authHeader } })
+            .set({
+              adapterConfig: {
+                ...cfg,
+                url: wsGatewayUrl,
+                authToken: gatewayAuthToken,
+                autoPairOnFirstConnect: true,
+                sessionKeyStrategy: "issue",
+                timeoutSec: 300,
+              },
+            })
             .where(eq(agentsTable.id, agent.id));
         }
-        console.log(`[provisioning] Updated ${agentRows.length} agent adapter URLs to ${gatewayUrl} with hooks auth`);
+        console.log(`[provisioning] Updated ${agentRows.length} agent adapter configs → ${wsGatewayUrl}`);
       } catch (urlErr) {
-        console.warn(`[provisioning] Failed to update agent URLs: ${urlErr}`);
+        console.warn(`[provisioning] Failed to update agent adapter configs: ${urlErr}`);
       }
 
       res.json({
