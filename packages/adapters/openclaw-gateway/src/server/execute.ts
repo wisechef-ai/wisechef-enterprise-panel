@@ -127,11 +127,20 @@ function resolveSessionKey(input: {
   configuredSessionKey: string | null;
   runId: string;
   issueId: string | null;
+  agentId: string | null;
 }): string {
   const fallback = input.configuredSessionKey ?? "paperclip";
-  if (input.strategy === "run") return `paperclip:run:${input.runId}`;
-  if (input.strategy === "issue" && input.issueId) return `paperclip:issue:${input.issueId}`;
-  return fallback;
+  let raw: string;
+  if (input.strategy === "run") raw = `paperclip:run:${input.runId}`;
+  else if (input.strategy === "issue" && input.issueId) raw = `paperclip:issue:${input.issueId}`;
+  else raw = fallback;
+
+  // If we have an agentId and the key isn't already in agent:<id>:<rest> format,
+  // wrap it so the gateway can route to the correct agent session store.
+  if (input.agentId && !raw.startsWith("agent:")) {
+    return `agent:${input.agentId}:${raw}`;
+  }
+  return raw;
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -920,6 +929,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     configuredSessionKey,
     runId: ctx.runId,
     issueId: wakePayload.issueId,
+    agentId: nonEmpty(ctx.config.agentId),
   });
 
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
