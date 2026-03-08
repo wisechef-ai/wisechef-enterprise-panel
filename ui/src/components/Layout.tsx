@@ -48,11 +48,24 @@ export function Layout() {
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;
     if (health?.deploymentMode === "authenticated") return;
-    if (companies.length === 0) {
+
+    // Auto-open wizard when: no companies exist, OR ?onboard=true (post-Stripe redirect)
+    const params = new URLSearchParams(location.search);
+    const forceOnboard = params.has("onboard") || params.has("stripe_session");
+
+    if (companies.length === 0 || forceOnboard) {
       onboardingTriggered.current = true;
+      // Clean up URL params after triggering
+      if (forceOnboard) {
+        params.delete("onboard");
+        params.delete("stripe_session");
+        params.delete("plan");
+        const clean = params.toString();
+        window.history.replaceState({}, "", location.pathname + (clean ? `?${clean}` : ""));
+      }
       openOnboarding();
     }
-  }, [companies, companiesLoading, openOnboarding, health?.deploymentMode]);
+  }, [companies, companiesLoading, openOnboarding, health?.deploymentMode, location.search]);
 
   useEffect(() => {
     if (!companyPrefix || companiesLoading || companies.length === 0) return;
