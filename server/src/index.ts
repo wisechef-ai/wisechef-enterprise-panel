@@ -1,4 +1,15 @@
 /// <reference path="./types/express.d.ts" />
+
+// Prevent unhandled WS rejections (e.g. openclaw_gateway adapter) from crashing the server
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  if (msg.includes("gateway closed") || msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+    console.error(`[server] swallowed unhandledRejection (gateway/ws): ${msg}`);
+    return;
+  }
+  console.error("[server] unhandledRejection:", reason);
+});
+
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
