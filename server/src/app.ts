@@ -122,6 +122,11 @@ export async function createApp(
     }),
   );
   api.use(provisioningRoutes(db));
+
+  // Stub routes: silence noisy 404s from polling clients (board UI inside containers)
+  api.get("/usage", (_req, res) => res.json({ ok: true, usage: {} }));
+  api.get("/usage-limits", (_req, res) => res.json({ ok: true, limits: {} }));
+
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
