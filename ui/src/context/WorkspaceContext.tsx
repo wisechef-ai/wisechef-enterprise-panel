@@ -8,14 +8,18 @@ import {
 } from "react";
 
 type WorkspaceView = "personal" | "company";
+type BoardPage = string;
 
 interface WorkspaceContextValue {
   view: WorkspaceView;
   setView: (view: WorkspaceView) => void;
   isPersonal: boolean;
+  boardPage: BoardPage;
+  setBoardPage: (page: BoardPage) => void;
 }
 
 const STORAGE_KEY = "wisechef.workspaceView";
+const BOARD_PAGE_KEY = "wisechef.boardPage";
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
@@ -25,14 +29,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return stored === "personal" ? "personal" : "company";
   });
 
+  const [boardPage, setBoardPageState] = useState<BoardPage>(() => {
+    return localStorage.getItem(BOARD_PAGE_KEY) || "chat";
+  });
+
   const setView = useCallback((next: WorkspaceView) => {
     setViewState(next);
     localStorage.setItem(STORAGE_KEY, next);
   }, []);
 
+  const setBoardPage = useCallback((page: BoardPage) => {
+    setBoardPageState(page);
+    localStorage.setItem(BOARD_PAGE_KEY, page);
+  }, []);
+
   const value = useMemo(
-    () => ({ view, setView, isPersonal: view === "personal" }),
-    [view, setView],
+    () => ({
+      view,
+      setView,
+      isPersonal: view === "personal",
+      boardPage,
+      setBoardPage,
+    }),
+    [view, setView, boardPage, setBoardPage],
   );
 
   return (

@@ -1,16 +1,23 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
-  ExternalLink,
   MessageCircle,
   Settings,
   Link2,
-  Bot,
   Brain,
+  Heart,
+  KeyRound,
+  Cpu,
+  LayoutDashboard,
+  FolderOpen,
+  Calendar,
+  Puzzle,
   Loader2,
   Crown,
+  WifiOff,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
-import { Button } from "@/components/ui/button";
+import { useWorkspace } from "../context/WorkspaceContext";
+import { cn } from "../lib/utils";
 
 interface DeploymentInfo {
   running: boolean;
@@ -19,8 +26,25 @@ interface DeploymentInfo {
   agentCount?: number;
 }
 
+const BOARD_PAGES = [
+  { id: "chat", label: "Chat", icon: MessageCircle },
+  { id: "kanban", label: "Tasks", icon: LayoutDashboard },
+  { id: "calendar", label: "Activity", icon: Calendar },
+  { id: "files", label: "Files", icon: FolderOpen },
+  { id: "skills", label: "Skills", icon: Puzzle },
+  { id: "soul", label: "Soul / Persona", icon: Heart },
+  { id: "credentials", label: "Credentials", icon: KeyRound },
+  { id: "ai-provider", label: "AI Provider", icon: Cpu },
+  { id: "link-channel", label: "Link Channel", icon: Link2 },
+  { id: "memory", label: "Memory", icon: Brain },
+  { id: "settings", label: "Settings", icon: Settings },
+] as const;
+
+export type BoardPage = (typeof BOARD_PAGES)[number]["id"];
+
 export function PersonalSidebar() {
   const { selectedCompanyId, selectedCompany } = useCompany();
+  const { boardPage, setBoardPage } = useWorkspace();
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -51,11 +75,21 @@ export function PersonalSidebar() {
 
     setLoading(true);
     void fetchStatus();
-    return () => { cancelled = true; };
+    const interval = setInterval(fetchStatus, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [selectedCompanyId]);
 
-  const boardUrl = deployment?.hostname ? `https://${deployment.hostname}` : null;
   const isOnline = deployment?.running && deployment?.healthy;
+
+  const handleNavClick = useCallback(
+    (pageId: string) => {
+      setBoardPage(pageId as BoardPage);
+    },
+    [setBoardPage],
+  );
 
   return (
     <aside className="w-60 h-full min-h-0 border-r border-border bg-background flex flex-col">
@@ -65,152 +99,74 @@ export function PersonalSidebar() {
         <span className="text-sm font-bold text-foreground truncate">
           Personal Assistant
         </span>
+        {!loading && (
+          <span
+            className={cn(
+              "ml-auto h-2 w-2 rounded-full shrink-0",
+              isOnline ? "bg-green-400" : "bg-red-400",
+            )}
+            title={isOnline ? "Online" : "Offline"}
+          />
+        )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">
+      {/* Navigation */}
+      <nav className="flex-1 min-h-0 overflow-y-auto p-2 space-y-0.5">
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : !selectedCompany ? (
-          <div className="text-sm text-muted-foreground py-4">
+          <div className="text-sm text-muted-foreground px-3 py-4">
             Select a company to see your personal assistant.
           </div>
-        ) : (
-          <div className="space-y-6">
-            {/* Status */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                CEO Agent
-              </h3>
-              <div className="flex items-center gap-2 text-sm">
-                <span
-                  className={`h-2 w-2 rounded-full shrink-0 ${isOnline ? "bg-green-400" : "bg-red-400"}`}
-                />
-                <span className="text-foreground">
-                  {isOnline ? "Online" : "Offline"}
-                </span>
-                {deployment?.hostname && (
-                  <span className="text-xs text-muted-foreground truncate">
-                    {deployment.hostname}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Quick actions */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Quick Actions
-              </h3>
-              <div className="space-y-1">
-                {boardUrl && (
-                  <a
-                    href={boardUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-foreground hover:bg-accent/50 rounded-md transition-colors group"
-                  >
-                    <MessageCircle className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1 truncate">Chat with CEO</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  </a>
-                )}
-
-                {boardUrl && (
-                  <a
-                    href={`${boardUrl}?skip`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-foreground hover:bg-accent/50 rounded-md transition-colors group"
-                  >
-                    <Bot className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1 truncate">Agent Dashboard</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  </a>
-                )}
-
-                {boardUrl && (
-                  <a
-                    href={`${boardUrl}/link`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-foreground hover:bg-accent/50 rounded-md transition-colors group"
-                  >
-                    <Link2 className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1 truncate">Connect Messenger</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  </a>
-                )}
-
-                {boardUrl && (
-                  <a
-                    href={`${boardUrl}/memory`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-foreground hover:bg-accent/50 rounded-md transition-colors group"
-                  >
-                    <Brain className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1 truncate">Agent Memory</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  </a>
-                )}
-
-                {boardUrl && (
-                  <a
-                    href={`${boardUrl}/settings`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-foreground hover:bg-accent/50 rounded-md transition-colors group"
-                  >
-                    <Settings className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
-                    <span className="flex-1 truncate">Agent Settings</span>
-                    <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
-                  </a>
-                )}
-              </div>
-            </div>
-
-            {/* No deployment state */}
-            {!boardUrl && (
-              <div className="rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
-                <p>Your personal assistant hasn't been deployed yet.</p>
-                <p className="mt-1 text-xs">
-                  Deploy your company from the enterprise panel to activate your CEO agent.
-                </p>
-              </div>
-            )}
-
-            {/* Company info */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Company
-              </h3>
-              <div className="text-sm space-y-1">
-                <div className="flex items-center gap-2">
-                  {selectedCompany.brandColor && (
-                    <div
-                      className="w-3 h-3 rounded-sm shrink-0"
-                      style={{ backgroundColor: selectedCompany.brandColor }}
-                    />
-                  )}
-                  <span className="font-medium text-foreground">{selectedCompany.name}</span>
-                </div>
-                {selectedCompany.description && (
-                  <p className="text-xs text-muted-foreground line-clamp-2">
-                    {selectedCompany.description}
-                  </p>
-                )}
-                {deployment?.agentCount != null && (
-                  <p className="text-xs text-muted-foreground">
-                    {deployment.agentCount} agent{deployment.agentCount !== 1 ? "s" : ""} deployed
-                  </p>
-                )}
-              </div>
-            </div>
+        ) : !deployment?.hostname ? (
+          <div className="rounded-md border border-border bg-muted/30 p-3 mx-1 mt-2 text-sm text-muted-foreground">
+            <WifiOff className="h-4 w-4 mb-1.5 text-muted-foreground" />
+            <p>Assistant not deployed yet.</p>
+            <p className="mt-1 text-xs">
+              Deploy your company from the enterprise view to activate your CEO agent.
+            </p>
           </div>
+        ) : (
+          BOARD_PAGES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => handleNavClick(item.id)}
+              className={cn(
+                "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] transition-colors",
+                boardPage === item.id
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              <item.icon className="h-4 w-4 shrink-0" />
+              <span className="truncate">{item.label}</span>
+            </button>
+          ))
         )}
-      </div>
+      </nav>
+
+      {/* Company info footer */}
+      {selectedCompany && (
+        <div className="border-t border-border px-3 py-2.5">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {selectedCompany.brandColor && (
+              <div
+                className="w-2.5 h-2.5 rounded-sm shrink-0"
+                style={{ backgroundColor: selectedCompany.brandColor }}
+              />
+            )}
+            <span className="truncate font-medium">{selectedCompany.name}</span>
+          </div>
+          {deployment?.agentCount != null && (
+            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+              {deployment.agentCount} agent{deployment.agentCount !== 1 ? "s" : ""}
+            </p>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

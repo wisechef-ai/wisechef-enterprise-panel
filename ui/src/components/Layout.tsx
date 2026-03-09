@@ -5,6 +5,7 @@ import { Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
 import { PersonalSidebar } from "./PersonalSidebar";
+import { PersonalBoardView } from "./PersonalBoardView";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { PropertiesPanel } from "./PropertiesPanel";
@@ -290,18 +291,24 @@ export function Layout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 h-full">
-        <BreadcrumbBar />
-        <div className="flex flex-1 min-h-0">
-          <main
-            id="main-content"
-            tabIndex={-1}
-            className={cn("flex-1 overflow-auto p-4 md:p-6", isMobile && "pb-[calc(5rem+env(safe-area-inset-bottom))]")}
-            onScroll={handleMainScroll}
-          >
-            <Outlet />
-          </main>
-          <PropertiesPanel />
-        </div>
+        {isPersonal ? (
+          <PersonalBoardView />
+        ) : (
+          <>
+            <BreadcrumbBar />
+            <div className="flex flex-1 min-h-0">
+              <main
+                id="main-content"
+                tabIndex={-1}
+                className={cn("flex-1 overflow-auto p-4 md:p-6", isMobile && "pb-[calc(5rem+env(safe-area-inset-bottom))]")}
+                onScroll={handleMainScroll}
+              >
+                <Outlet />
+              </main>
+              <PropertiesPanel />
+            </div>
+          </>
+        )}
       </div>
       {isMobile && <MobileBottomNav visible={mobileNavVisible} />}
       <CommandPalette />
