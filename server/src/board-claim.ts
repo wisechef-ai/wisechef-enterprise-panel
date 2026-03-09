@@ -12,9 +12,9 @@ type ChallengeStatus = "available" | "claimed" | "expired" | "invalid";
 type ClaimChallenge = {
   token: string;
   code: string;
-  createdAt: Date;
-  expiresAt: Date;
-  claimedAt: Date | null;
+  createdAt: string;
+  expiresAt: string;
+  claimedAt: string | null;
   claimedByUserId: string | null;
 };
 
@@ -24,8 +24,8 @@ function createChallenge(now = new Date()): ClaimChallenge {
   return {
     token: randomBytes(24).toString("hex"),
     code: randomBytes(12).toString("hex"),
-    createdAt: now,
-    expiresAt: new Date(now.getTime() + CLAIM_TTL_MS),
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + CLAIM_TTL_MS).toISOString(),
     claimedAt: null,
     claimedByUserId: null,
   };
@@ -36,7 +36,7 @@ function getChallengeStatus(token: string, code: string | undefined): ChallengeS
   if (activeChallenge.token !== token) return "invalid";
   if (activeChallenge.code !== (code ?? "")) return "invalid";
   if (activeChallenge.claimedAt) return "claimed";
-  if (activeChallenge.expiresAt.getTime() <= Date.now()) return "expired";
+  if (new Date(activeChallenge.expiresAt).getTime() <= Date.now()) return "expired";
   return "available";
 }
 
@@ -60,14 +60,14 @@ export async function initializeBoardClaimChallenge(
     return;
   }
 
-  if (!activeChallenge || activeChallenge.expiresAt.getTime() <= Date.now() || activeChallenge.claimedAt) {
+  if (!activeChallenge || new Date(activeChallenge.expiresAt).getTime() <= Date.now() || activeChallenge.claimedAt) {
     activeChallenge = createChallenge();
   }
 }
 
 export function getBoardClaimWarningUrl(host: string, port: number): string | null {
   if (!activeChallenge) return null;
-  if (activeChallenge.claimedAt || activeChallenge.expiresAt.getTime() <= Date.now()) return null;
+  if (activeChallenge.claimedAt || new Date(activeChallenge.expiresAt).getTime() <= Date.now()) return null;
   const visibleHost = host === "0.0.0.0" ? "localhost" : host;
   return `http://${visibleHost}:${port}/board-claim/${activeChallenge.token}?code=${activeChallenge.code}`;
 }
@@ -77,7 +77,7 @@ export function inspectBoardClaimChallenge(token: string, code: string | undefin
   return {
     status,
     requiresSignIn: true,
-    expiresAt: activeChallenge?.expiresAt?.toISOString() ?? null,
+    expiresAt: activeChallenge?.expiresAt ?? null,
     claimedByUserId: activeChallenge?.claimedByUserId ?? null,
   };
 }
@@ -134,14 +134,14 @@ export async function claimBoardOwnership(
       if (existing.status !== "active") {
         await tx
           .update(companyMemberships)
-          .set({ status: "active", membershipRole: "owner", updatedAt: new Date() })
+          .set({ status: "active", membershipRole: "owner", updatedAt: new Date().toISOString() })
           .where(eq(companyMemberships.id, existing.id));
       }
     }
   });
 
   if (activeChallenge && activeChallenge.token === opts.token) {
-    activeChallenge.claimedAt = new Date();
+    activeChallenge.claimedAt = new Date().toISOString();
     activeChallenge.claimedByUserId = opts.userId;
   }
 

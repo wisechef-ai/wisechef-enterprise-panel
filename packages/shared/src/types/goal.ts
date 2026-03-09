@@ -9,6 +9,6 @@ export interface Goal {
   status: GoalStatus;
   parentId: string | null;
   ownerAgentId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }

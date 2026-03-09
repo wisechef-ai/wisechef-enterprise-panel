@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
+    "@types/better-sqlite3": "^7.6.13",
     "esbuild": "^0.27.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
@@ -36,5 +37,13 @@
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@9.15.4"
+  "packageManager": "pnpm@9.15.4",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "drizzle-orm": "0.38.4"
+    }
+  }
 }

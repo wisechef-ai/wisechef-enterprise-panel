@@ -124,7 +124,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
 
     await db
       .update(agentApiKeys)
-      .set({ lastUsedAt: new Date() })
+      .set({ lastUsedAt: new Date().toISOString() })
       .where(eq(agentApiKeys.id, key.id));
 
     const agentRecord = await db

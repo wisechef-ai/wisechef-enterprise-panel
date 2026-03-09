@@ -724,7 +724,7 @@ export function agentRoutes(db: Db) {
         decisionNote: null,
         decidedByUserId: null,
         decidedAt: null,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       });
 
       if (sourceIssueIds.length > 0) {
@@ -1308,7 +1308,7 @@ export function agentRoutes(db: Db) {
       agentId: heartbeatRuns.agentId,
       agentName: agentsTable.name,
       adapterType: agentsTable.adapterType,
-      issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
+      issueId: sql<string | null>`json_extract(${heartbeatRuns.contextSnapshot}, '$.issueId')`.as("issueId"),
     };
 
     const liveRuns = await db
@@ -1434,7 +1434,7 @@ export function agentRoutes(db: Db) {
         and(
           eq(heartbeatRuns.companyId, issue.companyId),
           inArray(heartbeatRuns.status, ["queued", "running"]),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+          sql`json_extract(${heartbeatRuns.contextSnapshot}, '$.issueId') = ${issue.id}`,
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt));

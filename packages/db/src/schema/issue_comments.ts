@@ -1,19 +1,20 @@
-import { pgTable, uuid, text, timestamp, index } from "drizzle-orm/pg-core";
+import { sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { agents } from "./agents.js";
 
-export const issueComments = pgTable(
+export const issueComments = sqliteTable(
   "issue_comments",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    issueId: uuid("issue_id").notNull().references(() => issues.id),
-    authorAgentId: uuid("author_agent_id").references(() => agents.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    issueId: text("issue_id").notNull().references(() => issues.id),
+    authorAgentId: text("author_agent_id").references(() => agents.id),
     authorUserId: text("author_user_id"),
     body: text("body").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     issueIdx: index("issue_comments_issue_idx").on(table.issueId),

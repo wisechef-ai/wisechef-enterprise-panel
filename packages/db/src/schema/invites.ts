@@ -1,21 +1,22 @@
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 
-export const invites = pgTable(
+export const invites = sqliteTable(
   "invites",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").references(() => companies.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").references(() => companies.id),
     inviteType: text("invite_type").notNull().default("company_join"),
     tokenHash: text("token_hash").notNull(),
     allowedJoinTypes: text("allowed_join_types").notNull().default("both"),
-    defaultsPayload: jsonb("defaults_payload").$type<Record<string, unknown> | null>(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    defaultsPayload: text("defaults_payload", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    expiresAt: text("expires_at").notNull(),
     invitedByUserId: text("invited_by_user_id"),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: text("revoked_at"),
+    acceptedAt: text("accepted_at"),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     tokenHashUniqueIdx: uniqueIndex("invites_token_hash_unique_idx").on(table.tokenHash),

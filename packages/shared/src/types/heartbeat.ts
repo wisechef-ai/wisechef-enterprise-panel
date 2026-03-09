@@ -12,8 +12,8 @@ export interface HeartbeatRun {
   invocationSource: HeartbeatInvocationSource;
   triggerDetail: WakeupTriggerDetail | null;
   status: HeartbeatRunStatus;
-  startedAt: Date | null;
-  finishedAt: Date | null;
+  startedAt: string | null;
+  finishedAt: string | null;
   error: string | null;
   wakeupRequestId: string | null;
   exitCode: number | null;
@@ -32,8 +32,8 @@ export interface HeartbeatRun {
   errorCode: string | null;
   externalRunId: string | null;
   contextSnapshot: Record<string, unknown> | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface HeartbeatRunEvent {
@@ -48,7 +48,7 @@ export interface HeartbeatRunEvent {
   color: string | null;
   message: string | null;
   payload: Record<string, unknown> | null;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export interface AgentRuntimeState {
@@ -66,8 +66,8 @@ export interface AgentRuntimeState {
   totalCachedInputTokens: number;
   totalCostCents: number;
   lastError: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentTaskSession {
@@ -80,8 +80,8 @@ export interface AgentTaskSession {
   sessionDisplayId: string | null;
   lastRunId: string | null;
   lastError: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentWakeupRequest {
@@ -98,10 +98,10 @@ export interface AgentWakeupRequest {
   requestedByActorId: string | null;
   idempotencyKey: string | null;
   runId: string | null;
-  requestedAt: Date;
-  claimedAt: Date | null;
-  finishedAt: Date | null;
+  requestedAt: string;
+  claimedAt: string | null;
+  finishedAt: string | null;
   error: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }

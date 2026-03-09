@@ -138,7 +138,7 @@ function createDefaultStore(db: Db): ProvisioningStore {
       return company;
     },
     async updateCompanyStatus(companyId: string, status: string) {
-      await db.update(companies).set({ status, updatedAt: new Date() }).where(eq(companies.id, companyId));
+      await db.update(companies).set({ status, updatedAt: new Date().toISOString() }).where(eq(companies.id, companyId));
     },
     async saveDeployment(companyId: string, deployment: DeploymentRecord) {
       await db.insert(activityLog).values({

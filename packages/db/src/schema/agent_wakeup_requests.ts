@@ -1,29 +1,30 @@
-import { pgTable, uuid, text, timestamp, jsonb, integer, index } from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
-export const agentWakeupRequests = pgTable(
+export const agentWakeupRequests = sqliteTable(
   "agent_wakeup_requests",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    agentId: text("agent_id").notNull().references(() => agents.id),
     source: text("source").notNull(),
     triggerDetail: text("trigger_detail"),
     reason: text("reason"),
-    payload: jsonb("payload").$type<Record<string, unknown>>(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
     status: text("status").notNull().default("queued"),
     coalescedCount: integer("coalesced_count").notNull().default(0),
     requestedByActorType: text("requested_by_actor_type"),
     requestedByActorId: text("requested_by_actor_id"),
     idempotencyKey: text("idempotency_key"),
-    runId: uuid("run_id"),
-    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
-    claimedAt: timestamp("claimed_at", { withTimezone: true }),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    runId: text("run_id"),
+    requestedAt: text("requested_at").notNull().$defaultFn(() => new Date().toISOString()),
+    claimedAt: text("claimed_at"),
+    finishedAt: text("finished_at"),
     error: text("error"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyAgentStatusIdx: index("agent_wakeup_requests_company_agent_status_idx").on(

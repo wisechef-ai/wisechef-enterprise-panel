@@ -72,11 +72,11 @@ export function dashboardService(db: Db) {
         if (row.status !== "done" && row.status !== "cancelled") taskCounts.open += count;
       }
 
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const nowDate = new Date();
+      const monthStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1).toISOString();
       const [{ monthSpend }] = await db
         .select({
-          monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int`,
+          monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)`,
         })
         .from(costEvents)
         .where(

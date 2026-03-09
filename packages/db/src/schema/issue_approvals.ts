@@ -1,18 +1,18 @@
-import { pgTable, uuid, text, timestamp, index, primaryKey } from "drizzle-orm/pg-core";
+import { sqliteTable, text, index, primaryKey } from "drizzle-orm/sqlite-core";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { approvals } from "./approvals.js";
 import { agents } from "./agents.js";
 
-export const issueApprovals = pgTable(
+export const issueApprovals = sqliteTable(
   "issue_approvals",
   {
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
-    approvalId: uuid("approval_id").notNull().references(() => approvals.id, { onDelete: "cascade" }),
-    linkedByAgentId: uuid("linked_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+    approvalId: text("approval_id").notNull().references(() => approvals.id, { onDelete: "cascade" }),
+    linkedByAgentId: text("linked_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     linkedByUserId: text("linked_by_user_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.issueId, table.approvalId], name: "issue_approvals_pk" }),

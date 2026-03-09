@@ -15,8 +15,8 @@ export interface ProjectWorkspace {
   repoRef: string | null;
   metadata: Record<string, unknown> | null;
   isPrimary: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Project {
@@ -35,7 +35,7 @@ export interface Project {
   color: string | null;
   workspaces: ProjectWorkspace[];
   primaryWorkspace: ProjectWorkspace | null;
-  archivedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -24,7 +24,7 @@ export function sidebarBadgeService(db: Db) {
         .then((rows) => Number(rows[0]?.count ?? 0));
 
       const latestRunByAgent = await db
-        .selectDistinctOn([heartbeatRuns.agentId], {
+        .selectDistinct( {
           runStatus: heartbeatRuns.status,
         })
         .from(heartbeatRuns)

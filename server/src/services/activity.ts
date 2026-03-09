@@ -78,7 +78,7 @@ export function activityService(db: Db) {
           and(
             eq(heartbeatRuns.companyId, companyId),
             or(
-              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              sql`json_extract(${heartbeatRuns.contextSnapshot}, '$.issueId') = ${issueId}`,
               sql`exists (
                 select 1
                 from ${activityLog}
@@ -104,7 +104,7 @@ export function activityService(db: Db) {
       if (!run) return [];
 
       const fromActivity = await db
-        .selectDistinctOn([issueIdAsText], {
+        .selectDistinct( {
           issueId: issues.id,
           identifier: issues.identifier,
           title: issues.title,

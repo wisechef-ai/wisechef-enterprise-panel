@@ -46,7 +46,7 @@ export function approvalService(db: Db) {
         throw unprocessable("Only pending or revision requested approvals can be approved");
       }
 
-      const now = new Date();
+      const now = new Date().toISOString();
       const updated = await db
         .update(approvals)
         .set({
@@ -112,7 +112,7 @@ export function approvalService(db: Db) {
         throw unprocessable("Only pending or revision requested approvals can be rejected");
       }
 
-      const now = new Date();
+      const now = new Date().toISOString();
       const updated = await db
         .update(approvals)
         .set({
@@ -143,7 +143,7 @@ export function approvalService(db: Db) {
         throw unprocessable("Only pending approvals can request revision");
       }
 
-      const now = new Date();
+      const now = new Date().toISOString();
       return db
         .update(approvals)
         .set({
@@ -164,7 +164,7 @@ export function approvalService(db: Db) {
         throw unprocessable("Only revision requested approvals can be resubmitted");
       }
 
-      const now = new Date();
+      const now = new Date().toISOString();
       return db
         .update(approvals)
         .set({

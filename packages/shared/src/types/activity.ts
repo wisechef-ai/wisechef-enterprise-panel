@@ -9,5 +9,5 @@ export interface ActivityEvent {
   agentId: string | null;
   runId: string | null;
   details: Record<string, unknown> | null;
-  createdAt: Date;
+  createdAt: string;
 }

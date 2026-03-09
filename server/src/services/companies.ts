@@ -84,7 +84,7 @@ export function companyService(db: Db) {
     update: (id: string, data: Partial<typeof companies.$inferInsert>) =>
       db
         .update(companies)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...data, updatedAt: new Date().toISOString() })
         .where(eq(companies.id, id))
         .returning()
         .then((rows) => rows[0] ?? null),
@@ -92,7 +92,7 @@ export function companyService(db: Db) {
     archive: (id: string) =>
       db
         .update(companies)
-        .set({ status: "archived", updatedAt: new Date() })
+        .set({ status: "archived", updatedAt: new Date().toISOString() })
         .where(eq(companies.id, id))
         .returning()
         .then((rows) => rows[0] ?? null),

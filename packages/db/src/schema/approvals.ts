@@ -1,22 +1,23 @@
-import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
-export const approvals = pgTable(
+export const approvals = sqliteTable(
   "approvals",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
     type: text("type").notNull(),
-    requestedByAgentId: uuid("requested_by_agent_id").references(() => agents.id),
+    requestedByAgentId: text("requested_by_agent_id").references(() => agents.id),
     requestedByUserId: text("requested_by_user_id"),
     status: text("status").notNull().default("pending"),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     decisionNote: text("decision_note"),
     decidedByUserId: text("decided_by_user_id"),
-    decidedAt: timestamp("decided_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: text("decided_at"),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyStatusTypeIdx: index("approvals_company_status_type_idx").on(

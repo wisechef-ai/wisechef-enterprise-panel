@@ -326,7 +326,7 @@ export function issueRoutes(db: Db, storage: StorageService) {
       res.status(403).json({ error: "Board user context required" });
       return;
     }
-    const readState = await svc.markRead(issue.companyId, issue.id, req.actor.userId, new Date());
+    const readState = await svc.markRead(issue.companyId, issue.id, req.actor.userId, new Date().toISOString());
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: issue.companyId,

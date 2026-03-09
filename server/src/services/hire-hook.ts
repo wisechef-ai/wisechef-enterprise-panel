@@ -14,7 +14,7 @@ export interface NotifyHireApprovedInput {
   agentId: string;
   source: "join_request" | "approval";
   sourceId: string;
-  approvedAt?: Date;
+  approvedAt?: string;
 }
 
 /**
@@ -26,7 +26,7 @@ export async function notifyHireApproved(
   input: NotifyHireApprovedInput,
 ): Promise<void> {
   const { companyId, agentId, source, sourceId } = input;
-  const approvedAt = input.approvedAt ?? new Date();
+  const approvedAt = input.approvedAt ?? new Date().toISOString();
 
   const row = await db
     .select()
@@ -53,7 +53,7 @@ export async function notifyHireApproved(
     adapterType,
     source,
     sourceId,
-    approvedAt: approvedAt.toISOString(),
+    approvedAt: approvedAt,
     message: HIRE_APPROVED_MESSAGE,
   };
 

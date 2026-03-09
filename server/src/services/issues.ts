@@ -35,13 +35,13 @@ function applyStatusSideEffects(
   if (!status) return patch;
 
   if (status === "in_progress" && !patch.startedAt) {
-    patch.startedAt = new Date();
+    patch.startedAt = new Date().toISOString();
   }
   if (status === "done") {
-    patch.completedAt = new Date();
+    patch.completedAt = new Date().toISOString();
   }
   if (status === "cancelled") {
-    patch.cancelledAt = new Date();
+    patch.cancelledAt = new Date().toISOString();
   }
   return patch;
 }
@@ -67,7 +67,7 @@ type IssueActiveRunRow = {
   triggerDetail: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
-  createdAt: Date;
+  createdAt: string;
 };
 type IssueWithLabels = IssueRow & { labels: IssueLabelRow[]; labelIds: string[] };
 type IssueWithLabelsAndRun = IssueWithLabels & { activeRun: IssueActiveRunRow | null };
@@ -79,8 +79,8 @@ type IssueUserCommentStats = {
 type IssueUserContextInput = {
   createdByUserId: string | null;
   assigneeUserId: string | null;
-  createdAt: Date | string;
-  updatedAt: Date | string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
@@ -387,7 +387,7 @@ export function issueService(db: Db) {
     const stale = await isTerminalOrMissingHeartbeatRun(input.expectedCheckoutRunId);
     if (!stale) return null;
 
-    const now = new Date();
+    const now = new Date().toISOString();
     const adopted = await db
       .update(issues)
       .set({
@@ -573,8 +573,8 @@ export function issueService(db: Db) {
       return Number(row?.count ?? 0);
     },
 
-    markRead: async (companyId: string, issueId: string, userId: string, readAt: Date = new Date()) => {
-      const now = new Date();
+    markRead: async (companyId: string, issueId: string, userId: string, readAt: string = new Date().toISOString()) => {
+      const now = new Date().toISOString();
       const [row] = await db
         .insert(issueReadStates)
         .values({
@@ -646,13 +646,13 @@ export function issueService(db: Db) {
 
         const values = { ...issueData, companyId, issueNumber, identifier } as typeof issues.$inferInsert;
         if (values.status === "in_progress" && !values.startedAt) {
-          values.startedAt = new Date();
+          values.startedAt = new Date().toISOString();
         }
         if (values.status === "done") {
-          values.completedAt = new Date();
+          values.completedAt = new Date().toISOString();
         }
         if (values.status === "cancelled") {
-          values.cancelledAt = new Date();
+          values.cancelledAt = new Date().toISOString();
         }
 
         const [issue] = await tx.insert(issues).values(values).returning();
@@ -680,7 +680,7 @@ export function issueService(db: Db) {
 
       const patch: Partial<typeof issues.$inferInsert> = {
         ...issueData,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       };
 
       const nextAssigneeAgentId =
@@ -767,7 +767,7 @@ export function issueService(db: Db) {
       if (!issueCompany) throw notFound("Issue not found");
       await assertAssignableAgent(issueCompany.companyId, agentId);
 
-      const now = new Date();
+      const now = new Date().toISOString();
       const sameRunAssigneeCondition = checkoutRunId
         ? and(
           eq(issues.assigneeAgentId, agentId),
@@ -830,7 +830,7 @@ export function issueService(db: Db) {
           .set({
             checkoutRunId,
             executionRunId: checkoutRunId,
-            updatedAt: new Date(),
+            updatedAt: new Date().toISOString(),
           })
           .where(
             and(
@@ -972,7 +972,7 @@ export function issueService(db: Db) {
           status: "todo",
           assigneeAgentId: null,
           checkoutRunId: null,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(issues.id, id))
         .returning()
@@ -1048,7 +1048,7 @@ export function issueService(db: Db) {
       // Update issue's updatedAt so comment activity is reflected in recency sorting
       await db
         .update(issues)
-        .set({ updatedAt: new Date() })
+        .set({ updatedAt: new Date().toISOString() })
         .where(eq(issues.id, issueId));
 
       return comment;
@@ -1310,8 +1310,8 @@ export function issueService(db: Db) {
           repoRef: string | null;
           metadata: Record<string, unknown> | null;
           isPrimary: boolean;
-          createdAt: Date;
-          updatedAt: Date;
+          createdAt: string;
+          updatedAt: string;
         }>;
         primaryWorkspace: {
           id: string;
@@ -1323,8 +1323,8 @@ export function issueService(db: Db) {
           repoRef: string | null;
           metadata: Record<string, unknown> | null;
           isPrimary: boolean;
-          createdAt: Date;
-          updatedAt: Date;
+          createdAt: string;
+          updatedAt: string;
         } | null;
       }>();
       const goalMap = new Map<string, { id: string; title: string; description: string | null; level: string; status: string }>();

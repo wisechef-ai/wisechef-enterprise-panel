@@ -10,9 +10,9 @@ export interface Approval {
   payload: Record<string, unknown>;
   decisionNote: string | null;
   decidedByUserId: string | null;
-  decidedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ApprovalComment {
@@ -22,6 +22,6 @@ export interface ApprovalComment {
   authorAgentId: string | null;
   authorUserId: string | null;
   body: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }

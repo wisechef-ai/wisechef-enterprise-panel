@@ -4,8 +4,8 @@ import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, proj
 import { notFound, unprocessable } from "../errors.js";
 
 export interface CostDateRange {
-  from?: Date;
-  to?: Date;
+  from?: Date | string;
+  to?: Date | string;
 }
 
 export function costService(db: Db) {
@@ -32,7 +32,7 @@ export function costService(db: Db) {
         .update(agents)
         .set({
           spentMonthlyCents: sql`${agents.spentMonthlyCents} + ${event.costCents}`,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(agents.id, event.agentId));
 
@@ -40,7 +40,7 @@ export function costService(db: Db) {
         .update(companies)
         .set({
           spentMonthlyCents: sql`${companies.spentMonthlyCents} + ${event.costCents}`,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(companies.id, companyId));
 
@@ -59,7 +59,7 @@ export function costService(db: Db) {
       ) {
         await db
           .update(agents)
-          .set({ status: "paused", updatedAt: new Date() })
+          .set({ status: "paused", updatedAt: new Date().toISOString() })
           .where(eq(agents.id, updatedAgent.id));
       }
 
@@ -76,12 +76,12 @@ export function costService(db: Db) {
       if (!company) throw notFound("Company not found");
 
       const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
-      if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
-      if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+      if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from instanceof Date ? range.from.toISOString() : range.from));
+      if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to instanceof Date ? range.to.toISOString() : range.to));
 
       const [{ total }] = await db
         .select({
-          total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int`,
+          total: sql<number>`coalesce(sum(${costEvents.costCents}), 0)`,
         })
         .from(costEvents)
         .where(and(...conditions));
@@ -102,39 +102,39 @@ export function costService(db: Db) {
 
     byAgent: async (companyId: string, range?: CostDateRange) => {
       const conditions: ReturnType<typeof eq>[] = [eq(costEvents.companyId, companyId)];
-      if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
-      if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
+      if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from instanceof Date ? range.from.toISOString() : range.from));
+      if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to instanceof Date ? range.to.toISOString() : range.to));
 
       const costRows = await db
         .select({
           agentId: costEvents.agentId,
           agentName: agents.name,
           agentStatus: agents.status,
-          costCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::int`,
-          inputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::int`,
-          outputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::int`,
+          costCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)`,
+          inputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)`,
+          outputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)`,
         })
         .from(costEvents)
         .leftJoin(agents, eq(costEvents.agentId, agents.id))
         .where(and(...conditions))
         .groupBy(costEvents.agentId, agents.name, agents.status)
-        .orderBy(desc(sql`coalesce(sum(${costEvents.costCents}), 0)::int`));
+        .orderBy(desc(sql`coalesce(sum(${costEvents.costCents}), 0)`));
 
       const runConditions: ReturnType<typeof eq>[] = [eq(heartbeatRuns.companyId, companyId)];
-      if (range?.from) runConditions.push(gte(heartbeatRuns.finishedAt, range.from));
-      if (range?.to) runConditions.push(lte(heartbeatRuns.finishedAt, range.to));
+      if (range?.from) runConditions.push(gte(heartbeatRuns.finishedAt, range.from instanceof Date ? range.from.toISOString() : range.from));
+      if (range?.to) runConditions.push(lte(heartbeatRuns.finishedAt, range.to instanceof Date ? range.to.toISOString() : range.to));
 
       const runRows = await db
         .select({
           agentId: heartbeatRuns.agentId,
           apiRunCount:
-            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'api' then 1 else 0 end), 0)::int`,
+            sql<number>`coalesce(sum(case when coalesce(json_extract(${heartbeatRuns.usageJson}, '$.billingType'), 'unknown') = 'api' then 1 else 0 end), 0)`,
           subscriptionRunCount:
-            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then 1 else 0 end), 0)::int`,
+            sql<number>`coalesce(sum(case when coalesce(json_extract(${heartbeatRuns.usageJson}, '$.billingType'), 'unknown') = 'subscription' then 1 else 0 end), 0)`,
           subscriptionInputTokens:
-            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then coalesce((${heartbeatRuns.usageJson} ->> 'inputTokens')::int, 0) else 0 end), 0)::int`,
+            sql<number>`coalesce(sum(case when coalesce(json_extract(${heartbeatRuns.usageJson}, '$.billingType'), 'unknown') = 'subscription' then coalesce(json_extract(${heartbeatRuns.usageJson}, '$.inputTokens'), 0) else 0 end), 0)`,
           subscriptionOutputTokens:
-            sql<number>`coalesce(sum(case when coalesce((${heartbeatRuns.usageJson} ->> 'billingType'), 'unknown') = 'subscription' then coalesce((${heartbeatRuns.usageJson} ->> 'outputTokens')::int, 0) else 0 end), 0)::int`,
+            sql<number>`coalesce(sum(case when coalesce(json_extract(${heartbeatRuns.usageJson}, '$.billingType'), 'unknown') = 'subscription' then coalesce(json_extract(${heartbeatRuns.usageJson}, '$.outputTokens'), 0) else 0 end), 0)`,
         })
         .from(heartbeatRuns)
         .where(and(...runConditions))
@@ -156,7 +156,7 @@ export function costService(db: Db) {
     byProject: async (companyId: string, range?: CostDateRange) => {
       const issueIdAsText = sql<string>`${issues.id}::text`;
       const runProjectLinks = db
-        .selectDistinctOn([activityLog.runId, issues.projectId], {
+        .selectDistinct( {
           runId: activityLog.runId,
           projectId: issues.projectId,
         })
@@ -180,18 +180,18 @@ export function costService(db: Db) {
         .as("run_project_links");
 
       const conditions: ReturnType<typeof eq>[] = [eq(heartbeatRuns.companyId, companyId)];
-      if (range?.from) conditions.push(gte(heartbeatRuns.finishedAt, range.from));
-      if (range?.to) conditions.push(lte(heartbeatRuns.finishedAt, range.to));
+      if (range?.from) conditions.push(gte(heartbeatRuns.finishedAt, range.from instanceof Date ? range.from.toISOString() : range.from));
+      if (range?.to) conditions.push(lte(heartbeatRuns.finishedAt, range.to instanceof Date ? range.to.toISOString() : range.to));
 
-      const costCentsExpr = sql<number>`coalesce(sum(round(coalesce((${heartbeatRuns.usageJson} ->> 'costUsd')::numeric, 0) * 100)), 0)::int`;
+      const costCentsExpr = sql<number>`coalesce(sum(round(coalesce(json_extract(${heartbeatRuns.usageJson}, '$.costUsd'), 0) * 100)), 0)`;
 
       return db
         .select({
           projectId: runProjectLinks.projectId,
           projectName: projects.name,
           costCents: costCentsExpr,
-          inputTokens: sql<number>`coalesce(sum(coalesce((${heartbeatRuns.usageJson} ->> 'inputTokens')::int, 0)), 0)::int`,
-          outputTokens: sql<number>`coalesce(sum(coalesce((${heartbeatRuns.usageJson} ->> 'outputTokens')::int, 0)), 0)::int`,
+          inputTokens: sql<number>`coalesce(sum(coalesce(json_extract(${heartbeatRuns.usageJson}, '$.inputTokens'), 0)), 0)`,
+          outputTokens: sql<number>`coalesce(sum(coalesce(json_extract(${heartbeatRuns.usageJson}, '$.outputTokens'), 0)), 0)`,
         })
         .from(runProjectLinks)
         .innerJoin(heartbeatRuns, eq(runProjectLinks.runId, heartbeatRuns.id))

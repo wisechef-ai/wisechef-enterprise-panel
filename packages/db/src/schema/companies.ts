@@ -1,9 +1,10 @@
-import { pgTable, uuid, text, integer, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 
-export const companies = pgTable(
+export const companies = sqliteTable(
   "companies",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     name: text("name").notNull(),
     description: text("description"),
     status: text("status").notNull().default("active"),
@@ -11,12 +12,12 @@ export const companies = pgTable(
     issueCounter: integer("issue_counter").notNull().default(0),
     budgetMonthlyCents: integer("budget_monthly_cents").notNull().default(0),
     spentMonthlyCents: integer("spent_monthly_cents").notNull().default(0),
-    requireBoardApprovalForNewAgents: boolean("require_board_approval_for_new_agents")
+    requireBoardApprovalForNewAgents: integer("require_board_approval_for_new_agents", { mode: "boolean" })
       .notNull()
       .default(true),
     brandColor: text("brand_color"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     issuePrefixUniqueIdx: uniqueIndex("companies_issue_prefix_idx").on(table.issuePrefix),

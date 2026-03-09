@@ -74,7 +74,7 @@ function createClaimSecret() {
 }
 
 export function companyInviteExpiresAt(nowMs: number = Date.now()) {
-  return new Date(nowMs + COMPANY_INVITE_TTL_MS);
+  return new Date(nowMs + COMPANY_INVITE_TTL_MS).toISOString();
 }
 
 function tokenHashesMatch(left: string, right: string) {
@@ -1034,7 +1034,7 @@ export function buildInviteOnboardingTextDocument(
     ## Invite
     - inviteType: ${invite.inviteType}
     - allowedJoinTypes: ${invite.allowedJoinTypes}
-    - expiresAt: ${invite.expiresAt.toISOString()}
+    - expiresAt: ${invite.expiresAt}
   `);
 
   if (onboarding.inviteMessage) {
@@ -1261,7 +1261,7 @@ function requestIp(req: Request) {
 }
 
 function inviteExpired(invite: typeof invites.$inferSelect) {
-  return invite.expiresAt.getTime() <= Date.now();
+  return new Date(invite.expiresAt!).getTime() <= Date.now();
 }
 
 function isLocalImplicit(req: Request) {
@@ -1653,7 +1653,7 @@ export function accessRoutes(
         details: {
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
-          expiresAt: created.expiresAt.toISOString(),
+          expiresAt: created.expiresAt,
           hasAgentMessage: Boolean(normalizedAgentMessage)
         }
       });
@@ -1698,7 +1698,7 @@ export function accessRoutes(
         details: {
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
-          expiresAt: created.expiresAt.toISOString(),
+          expiresAt: created.expiresAt,
           hasAgentMessage: Boolean(normalizedAgentMessage)
         }
       });
@@ -1853,7 +1853,7 @@ export function accessRoutes(
         }
         const updatedInvite = await db
           .update(invites)
-          .set({ acceptedAt: new Date(), updatedAt: new Date() })
+          .set({ acceptedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
           .where(eq(invites.id, invite.id))
           .returning()
           .then((rows) => rows[0] ?? invite);
@@ -1975,7 +1975,7 @@ export function accessRoutes(
           : null;
       const claimSecretHash = claimSecret ? hashToken(claimSecret) : null;
       const claimSecretExpiresAt = claimSecret
-        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
         : null;
 
       const actorEmail =
@@ -1984,7 +1984,7 @@ export function accessRoutes(
         ? await db.transaction(async (tx) => {
             await tx
               .update(invites)
-              .set({ acceptedAt: new Date(), updatedAt: new Date() })
+              .set({ acceptedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
               .where(
                 and(
                   eq(invites.id, invite.id),
@@ -2041,7 +2041,7 @@ export function accessRoutes(
               adapterType: requestType === "agent" ? adapterType : null,
               agentDefaultsPayload:
                 requestType === "agent" ? joinDefaults.normalized : null,
-              updatedAt: new Date()
+              updatedAt: new Date().toISOString()
             })
             .where(eq(joinRequests.id, replayJoinRequestId as string))
             .returning()
@@ -2217,7 +2217,7 @@ export function accessRoutes(
 
     const revoked = await db
       .update(invites)
-      .set({ revokedAt: new Date(), updatedAt: new Date() })
+      .set({ revokedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
       .where(eq(invites.id, id))
       .returning()
       .then((rows) => rows[0]);
@@ -2372,9 +2372,9 @@ export function accessRoutes(
           status: "approved",
           approvedByUserId:
             req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
-          approvedAt: new Date(),
+          approvedAt: new Date().toISOString(),
           createdAgentId,
-          updatedAt: new Date()
+          updatedAt: new Date().toISOString()
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2396,7 +2396,7 @@ export function accessRoutes(
           agentId: createdAgentId,
           source: "join_request",
           sourceId: requestId,
-          approvedAt: new Date()
+          approvedAt: new Date().toISOString()
         }).catch(() => {});
       }
 
@@ -2431,8 +2431,8 @@ export function accessRoutes(
           status: "rejected",
           rejectedByUserId:
             req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
-          rejectedAt: new Date(),
-          updatedAt: new Date()
+          rejectedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2479,7 +2479,7 @@ export function accessRoutes(
       }
       if (
         joinRequest.claimSecretExpiresAt &&
-        joinRequest.claimSecretExpiresAt.getTime() <= Date.now()
+        new Date(joinRequest.claimSecretExpiresAt).getTime() <= Date.now()
       ) {
         throw conflict("Claim secret expired");
       }
@@ -2495,7 +2495,7 @@ export function accessRoutes(
 
       const consumed = await db
         .update(joinRequests)
-        .set({ claimSecretConsumedAt: new Date(), updatedAt: new Date() })
+        .set({ claimSecretConsumedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
         .where(
           and(
             eq(joinRequests.id, requestId),

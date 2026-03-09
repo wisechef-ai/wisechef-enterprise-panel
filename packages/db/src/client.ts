@@ -1,736 +1,454 @@
-import { createHash } from "node:crypto";
-import { drizzle as drizzlePg } from "drizzle-orm/postgres-js";
-import { migrate as migratePg } from "drizzle-orm/postgres-js/migrator";
-import { readFile, readdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import postgres from "postgres";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import Database from "better-sqlite3";
+import { sql } from "drizzle-orm";
 import * as schema from "./schema/index.js";
+import fs from "node:fs";
+import path from "node:path";
 
-const MIGRATIONS_FOLDER = fileURLToPath(new URL("./migrations", import.meta.url));
-const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
-const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
+export function createDb(dbPath: string) {
+  // Ensure parent directory exists
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 
-function isSafeIdentifier(value: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+  const sqlite = new Database(dbPath);
+
+  // Performance + integrity pragmas
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.pragma("synchronous = NORMAL");
+  sqlite.pragma("busy_timeout = 5000");
+
+  const db = drizzle(sqlite, { schema });
+  return db;
 }
 
-function quoteIdentifier(value: string): string {
-  if (!isSafeIdentifier(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
-  return `"${value.replaceAll("\"", "\"\"")}"`;
-}
-
-function quoteLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function splitMigrationStatements(content: string): string[] {
-  return content
-    .split("--> statement-breakpoint")
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
-}
-
-export type MigrationState =
-  | { status: "upToDate"; tableCount: number; availableMigrations: string[]; appliedMigrations: string[] }
-  | {
-      status: "needsMigrations";
-      tableCount: number;
-      availableMigrations: string[];
-      appliedMigrations: string[];
-      pendingMigrations: string[];
-      reason: "no-migration-journal-empty-db" | "no-migration-journal-non-empty-db" | "pending-migrations";
-    };
-
-export function createDb(url: string) {
-  const sql = postgres(url);
-  return drizzlePg(sql, { schema });
-}
-
-async function listMigrationFiles(): Promise<string[]> {
-  const entries = await readdir(MIGRATIONS_FOLDER, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-}
-
-type MigrationJournalFile = {
-  entries?: Array<{ idx?: number; tag?: string; when?: number }>;
-};
-
-type JournalMigrationEntry = {
-  fileName: string;
-  folderMillis: number;
-  order: number;
-};
-
-async function listJournalMigrationEntries(): Promise<JournalMigrationEntry[]> {
-  try {
-    const raw = await readFile(MIGRATIONS_JOURNAL_JSON, "utf8");
-    const parsed = JSON.parse(raw) as MigrationJournalFile;
-    if (!Array.isArray(parsed.entries)) return [];
-    return parsed.entries
-      .map((entry, entryIndex) => {
-        if (typeof entry?.tag !== "string") return null;
-        if (typeof entry?.when !== "number" || !Number.isFinite(entry.when)) return null;
-        const order = Number.isInteger(entry.idx) ? Number(entry.idx) : entryIndex;
-        return { fileName: `${entry.tag}.sql`, folderMillis: entry.when, order };
-      })
-      .filter((entry): entry is JournalMigrationEntry => entry !== null);
-  } catch {
-    return [];
+/**
+ * Push schema to SQLite — creates all tables if they don't exist.
+ * Uses CREATE TABLE IF NOT EXISTS for idempotent bootstrap.
+ */
+export function ensureSchema(db: Db) {
+  // Use drizzle's schema to create tables
+  // We generate CREATE TABLE IF NOT EXISTS statements from the schema definitions
+  const tableStatements = generateCreateTableStatements();
+  for (const stmt of tableStatements) {
+    db.run(sql.raw(stmt));
   }
 }
 
-async function listJournalMigrationFiles(): Promise<string[]> {
-  const entries = await listJournalMigrationEntries();
-  return entries.map((entry) => entry.fileName);
-}
-
-async function readMigrationFileContent(migrationFile: string): Promise<string> {
-  return readFile(new URL(`./migrations/${migrationFile}`, import.meta.url), "utf8");
-}
-
-async function orderMigrationsByJournal(migrationFiles: string[]): Promise<string[]> {
-  const journalEntries = await listJournalMigrationEntries();
-  const orderByFileName = new Map(journalEntries.map((entry) => [entry.fileName, entry.order]));
-  return [...migrationFiles].sort((left, right) => {
-    const leftOrder = orderByFileName.get(left);
-    const rightOrder = orderByFileName.get(right);
-    if (leftOrder === undefined && rightOrder === undefined) return left.localeCompare(right);
-    if (leftOrder === undefined) return 1;
-    if (rightOrder === undefined) return -1;
-    if (leftOrder === rightOrder) return left.localeCompare(right);
-    return leftOrder - rightOrder;
-  });
-}
-
-type SqlExecutor = Pick<ReturnType<typeof postgres>, "unsafe">;
-
-async function runInTransaction(sql: SqlExecutor, action: () => Promise<void>): Promise<void> {
-  await sql.unsafe("BEGIN");
-  try {
-    await action();
-    await sql.unsafe("COMMIT");
-  } catch (error) {
-    try {
-      await sql.unsafe("ROLLBACK");
-    } catch {
-      // Ignore rollback failures and surface the original error.
-    }
-    throw error;
-  }
-}
-
-async function latestMigrationCreatedAt(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-): Promise<number | null> {
-  const rows = await sql.unsafe<{ created_at: string | number | null }[]>(
-    `SELECT created_at FROM ${qualifiedTable} ORDER BY created_at DESC NULLS LAST LIMIT 1`,
-  );
-  const value = Number(rows[0]?.created_at ?? Number.NaN);
-  return Number.isFinite(value) ? value : null;
-}
-
-function normalizeFolderMillis(value: number | null | undefined): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return Math.trunc(value);
-  }
-  return Date.now();
-}
-
-async function ensureMigrationJournalTable(
-  sql: ReturnType<typeof postgres>,
-): Promise<{ migrationTableSchema: string; columnNames: Set<string> }> {
-  let migrationTableSchema = await discoverMigrationTableSchema(sql);
-  if (!migrationTableSchema) {
-    const drizzleSchema = quoteIdentifier("drizzle");
-    const migrationTable = quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE);
-    await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS ${drizzleSchema}`);
-    await sql.unsafe(
-      `CREATE TABLE IF NOT EXISTS ${drizzleSchema}.${migrationTable} (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`,
-    );
-    migrationTableSchema = (await discoverMigrationTableSchema(sql)) ?? "drizzle";
-  }
-
-  const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-  return { migrationTableSchema, columnNames };
-}
-
-async function migrationHistoryEntryExists(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-  columnNames: Set<string>,
-  migrationFile: string,
-  hash: string,
-): Promise<boolean> {
-  const predicates: string[] = [];
-  if (columnNames.has("hash")) predicates.push(`hash = ${quoteLiteral(hash)}`);
-  if (columnNames.has("name")) predicates.push(`name = ${quoteLiteral(migrationFile)}`);
-  if (predicates.length === 0) return false;
-
-  const rows = await sql.unsafe<{ one: number }[]>(
-    `SELECT 1 AS one FROM ${qualifiedTable} WHERE ${predicates.join(" OR ")} LIMIT 1`,
-  );
-  return rows.length > 0;
-}
-
-async function recordMigrationHistoryEntry(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-  columnNames: Set<string>,
-  migrationFile: string,
-  hash: string,
-  folderMillis: number,
-): Promise<void> {
-  const insertColumns: string[] = [];
-  const insertValues: string[] = [];
-
-  if (columnNames.has("hash")) {
-    insertColumns.push(quoteIdentifier("hash"));
-    insertValues.push(quoteLiteral(hash));
-  }
-  if (columnNames.has("name")) {
-    insertColumns.push(quoteIdentifier("name"));
-    insertValues.push(quoteLiteral(migrationFile));
-  }
-  if (columnNames.has("created_at")) {
-    const latestCreatedAt = await latestMigrationCreatedAt(sql, qualifiedTable);
-    const createdAt = latestCreatedAt === null
-      ? normalizeFolderMillis(folderMillis)
-      : Math.max(latestCreatedAt + 1, normalizeFolderMillis(folderMillis));
-    insertColumns.push(quoteIdentifier("created_at"));
-    insertValues.push(quoteLiteral(String(createdAt)));
-  }
-
-  if (insertColumns.length === 0) return;
-
-  await sql.unsafe(
-    `INSERT INTO ${qualifiedTable} (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
-  );
-}
-
-async function applyPendingMigrationsManually(
-  url: string,
-  pendingMigrations: string[],
-): Promise<void> {
-  if (pendingMigrations.length === 0) return;
-
-  const orderedPendingMigrations = await orderMigrationsByJournal(pendingMigrations);
-  const journalEntries = await listJournalMigrationEntries();
-  const folderMillisByFileName = new Map(
-    journalEntries.map((entry) => [entry.fileName, normalizeFolderMillis(entry.folderMillis)]),
-  );
-
-  const sql = postgres(url, { max: 1 });
-  try {
-    const { migrationTableSchema, columnNames } = await ensureMigrationJournalTable(sql);
-    const qualifiedTable = `${quoteIdentifier(migrationTableSchema)}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-
-    for (const migrationFile of orderedPendingMigrations) {
-      const migrationContent = await readMigrationFileContent(migrationFile);
-      const hash = createHash("sha256").update(migrationContent).digest("hex");
-      const existingEntry = await migrationHistoryEntryExists(
-        sql,
-        qualifiedTable,
-        columnNames,
-        migrationFile,
-        hash,
-      );
-      if (existingEntry) continue;
-
-      await runInTransaction(sql, async () => {
-        for (const statement of splitMigrationStatements(migrationContent)) {
-          await sql.unsafe(statement);
-        }
-
-        await recordMigrationHistoryEntry(
-          sql,
-          qualifiedTable,
-          columnNames,
-          migrationFile,
-          hash,
-          folderMillisByFileName.get(migrationFile) ?? Date.now(),
-        );
-      });
-    }
-  } finally {
-    await sql.end();
-  }
-}
-
-async function mapHashesToMigrationFiles(migrationFiles: string[]): Promise<Map<string, string>> {
-  const mapped = new Map<string, string>();
-
-  await Promise.all(
-    migrationFiles.map(async (migrationFile) => {
-      const content = await readMigrationFileContent(migrationFile);
-      const hash = createHash("sha256").update(content).digest("hex");
-      mapped.set(hash, migrationFile);
-    }),
-  );
-
-  return mapped;
-}
-
-async function getMigrationTableColumnNames(
-  sql: ReturnType<typeof postgres>,
-  migrationTableSchema: string,
-): Promise<Set<string>> {
-  const columns = await sql.unsafe<{ column_name: string }[]>(
-    `
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_schema = ${quoteLiteral(migrationTableSchema)}
-        AND table_name = ${quoteLiteral(DRIZZLE_MIGRATIONS_TABLE)}
-    `,
-  );
-  return new Set(columns.map((column) => column.column_name));
-}
-
-async function tableExists(
-  sql: ReturnType<typeof postgres>,
-  tableName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name = ${tableName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function columnExists(
-  sql: ReturnType<typeof postgres>,
-  tableName: string,
-  columnName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = ${tableName}
-        AND column_name = ${columnName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function indexExists(
-  sql: ReturnType<typeof postgres>,
-  indexName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relkind = 'i'
-        AND c.relname = ${indexName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function constraintExists(
-  sql: ReturnType<typeof postgres>,
-  constraintName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM pg_constraint c
-      JOIN pg_namespace n ON n.oid = c.connamespace
-      WHERE n.nspname = 'public'
-        AND c.conname = ${constraintName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function migrationStatementAlreadyApplied(
-  sql: ReturnType<typeof postgres>,
-  statement: string,
-): Promise<boolean> {
-  const normalized = statement.replace(/\s+/g, " ").trim();
-
-  const createTableMatch = normalized.match(/^CREATE TABLE(?: IF NOT EXISTS)? "([^"]+)"/i);
-  if (createTableMatch) {
-    return tableExists(sql, createTableMatch[1]);
-  }
-
-  const addColumnMatch = normalized.match(
-    /^ALTER TABLE "([^"]+)" ADD COLUMN(?: IF NOT EXISTS)? "([^"]+)"/i,
-  );
-  if (addColumnMatch) {
-    return columnExists(sql, addColumnMatch[1], addColumnMatch[2]);
-  }
-
-  const createIndexMatch = normalized.match(/^CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)? "([^"]+)"/i);
-  if (createIndexMatch) {
-    return indexExists(sql, createIndexMatch[1]);
-  }
-
-  const addConstraintMatch = normalized.match(/^ALTER TABLE "([^"]+)" ADD CONSTRAINT "([^"]+)"/i);
-  if (addConstraintMatch) {
-    return constraintExists(sql, addConstraintMatch[2]);
-  }
-
-  // If we cannot reason about a statement safely, require manual migration.
-  return false;
-}
-
-async function migrationContentAlreadyApplied(
-  sql: ReturnType<typeof postgres>,
-  migrationContent: string,
-): Promise<boolean> {
-  const statements = splitMigrationStatements(migrationContent);
-  if (statements.length === 0) return false;
-
-  for (const statement of statements) {
-    const applied = await migrationStatementAlreadyApplied(sql, statement);
-    if (!applied) return false;
-  }
-
-  return true;
-}
-
-async function loadAppliedMigrations(
-  sql: ReturnType<typeof postgres>,
-  migrationTableSchema: string,
-  availableMigrations: string[],
-): Promise<string[]> {
-  const quotedSchema = quoteIdentifier(migrationTableSchema);
-  const qualifiedTable = `${quotedSchema}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-  const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-
-  if (columnNames.has("name")) {
-    const rows = await sql.unsafe<{ name: string }[]>(`SELECT name FROM ${qualifiedTable} ORDER BY id`);
-    return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
-  }
-
-  if (columnNames.has("hash")) {
-    const rows = await sql.unsafe<{ hash: string }[]>(`SELECT hash FROM ${qualifiedTable} ORDER BY id`);
-    const hashesToMigrationFiles = await mapHashesToMigrationFiles(availableMigrations);
-    const appliedFromHashes = rows
-      .map((row) => hashesToMigrationFiles.get(row.hash))
-      .filter((name): name is string => Boolean(name));
-
-    if (appliedFromHashes.length > 0) {
-      // Best-effort: when all hashes resolve, this is authoritative.
-      if (appliedFromHashes.length === rows.length) return appliedFromHashes;
-
-      // Partial hash resolution can happen when files have changed; return what we can trust.
-      return appliedFromHashes;
-    }
-
-    // Fallback only when hashes are unavailable/unresolved.
-    if (columnNames.has("created_at")) {
-      const journalEntries = await listJournalMigrationEntries();
-      if (journalEntries.length > 0) {
-        const lastDbRows = await sql.unsafe<{ created_at: string | number | null }[]>(
-          `SELECT created_at FROM ${qualifiedTable} ORDER BY created_at DESC LIMIT 1`,
-        );
-        const lastCreatedAt = Number(lastDbRows[0]?.created_at ?? -1);
-        if (Number.isFinite(lastCreatedAt) && lastCreatedAt >= 0) {
-          return journalEntries
-            .filter((entry) => availableMigrations.includes(entry.fileName))
-            .filter((entry) => entry.folderMillis <= lastCreatedAt)
-            .map((entry) => entry.fileName)
-            .slice(0, rows.length);
-        }
-      }
-    }
-  }
-
-  const rows = await sql.unsafe<{ id: number }[]>(`SELECT id FROM ${qualifiedTable} ORDER BY id`);
-  const journalMigrationFiles = await listJournalMigrationFiles();
-  const appliedFromIds = rows
-    .map((row) => journalMigrationFiles[row.id - 1])
-    .filter((name): name is string => Boolean(name));
-  if (appliedFromIds.length > 0) return appliedFromIds;
-
-  return availableMigrations.slice(0, Math.max(0, rows.length));
-}
-
-export type MigrationHistoryReconcileResult = {
-  repairedMigrations: string[];
-  remainingMigrations: string[];
-};
-
-export async function reconcilePendingMigrationHistory(
-  url: string,
-): Promise<MigrationHistoryReconcileResult> {
-  const state = await inspectMigrations(url);
-  if (state.status !== "needsMigrations" || state.reason !== "pending-migrations") {
-    return { repairedMigrations: [], remainingMigrations: [] };
-  }
-
-  const sql = postgres(url, { max: 1 });
-  const repairedMigrations: string[] = [];
-
-  try {
-    const journalEntries = await listJournalMigrationEntries();
-    const folderMillisByFile = new Map(journalEntries.map((entry) => [entry.fileName, entry.folderMillis]));
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-    if (!migrationTableSchema) {
-      return { repairedMigrations, remainingMigrations: state.pendingMigrations };
-    }
-
-    const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-    const qualifiedTable = `${quoteIdentifier(migrationTableSchema)}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-
-    for (const migrationFile of state.pendingMigrations) {
-      const migrationContent = await readMigrationFileContent(migrationFile);
-      const alreadyApplied = await migrationContentAlreadyApplied(sql, migrationContent);
-      if (!alreadyApplied) break;
-
-      const hash = createHash("sha256").update(migrationContent).digest("hex");
-      const folderMillis = folderMillisByFile.get(migrationFile) ?? Date.now();
-      const existingByHash = columnNames.has("hash")
-        ? await sql.unsafe<{ created_at: string | number | null }[]>(
-            `SELECT created_at FROM ${qualifiedTable} WHERE hash = ${quoteLiteral(hash)} ORDER BY created_at DESC LIMIT 1`,
-          )
-        : [];
-      const existingByName = columnNames.has("name")
-        ? await sql.unsafe<{ created_at: string | number | null }[]>(
-            `SELECT created_at FROM ${qualifiedTable} WHERE name = ${quoteLiteral(migrationFile)} ORDER BY created_at DESC LIMIT 1`,
-          )
-        : [];
-      if (existingByHash.length > 0 || existingByName.length > 0) {
-        if (columnNames.has("created_at")) {
-          const existingHashCreatedAt = Number(existingByHash[0]?.created_at ?? -1);
-          if (existingByHash.length > 0 && Number.isFinite(existingHashCreatedAt) && existingHashCreatedAt < folderMillis) {
-            await sql.unsafe(
-              `UPDATE ${qualifiedTable} SET created_at = ${quoteLiteral(String(folderMillis))} WHERE hash = ${quoteLiteral(hash)} AND created_at < ${quoteLiteral(String(folderMillis))}`,
-            );
-          }
-
-          const existingNameCreatedAt = Number(existingByName[0]?.created_at ?? -1);
-          if (existingByName.length > 0 && Number.isFinite(existingNameCreatedAt) && existingNameCreatedAt < folderMillis) {
-            await sql.unsafe(
-              `UPDATE ${qualifiedTable} SET created_at = ${quoteLiteral(String(folderMillis))} WHERE name = ${quoteLiteral(migrationFile)} AND created_at < ${quoteLiteral(String(folderMillis))}`,
-            );
-          }
-        }
-
-        repairedMigrations.push(migrationFile);
-        continue;
-      }
-
-      const insertColumns: string[] = [];
-      const insertValues: string[] = [];
-
-      if (columnNames.has("hash")) {
-        insertColumns.push(quoteIdentifier("hash"));
-        insertValues.push(quoteLiteral(hash));
-      }
-      if (columnNames.has("name")) {
-        insertColumns.push(quoteIdentifier("name"));
-        insertValues.push(quoteLiteral(migrationFile));
-      }
-      if (columnNames.has("created_at")) {
-        insertColumns.push(quoteIdentifier("created_at"));
-        insertValues.push(quoteLiteral(String(folderMillis)));
-      }
-
-      if (insertColumns.length === 0) break;
-
-      await sql.unsafe(
-        `INSERT INTO ${qualifiedTable} (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
-      );
-      repairedMigrations.push(migrationFile);
-    }
-  } finally {
-    await sql.end();
-  }
-
-  const refreshed = await inspectMigrations(url);
-  return {
-    repairedMigrations,
-    remainingMigrations:
-      refreshed.status === "needsMigrations" ? refreshed.pendingMigrations : [],
-  };
-}
-
-async function discoverMigrationTableSchema(sql: ReturnType<typeof postgres>): Promise<string | null> {
-  const rows = await sql<{ schemaName: string }[]>`
-    SELECT n.nspname AS "schemaName"
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relname = ${DRIZZLE_MIGRATIONS_TABLE} AND c.relkind = 'r'
-  `;
-
-  if (rows.length === 0) return null;
-
-  const drizzleSchema = rows.find(({ schemaName }) => schemaName === "drizzle");
-  if (drizzleSchema) return drizzleSchema.schemaName;
-
-  const publicSchema = rows.find(({ schemaName }) => schemaName === "public");
-  if (publicSchema) return publicSchema.schemaName;
-
-  return rows[0]?.schemaName ?? null;
-}
-
-export async function inspectMigrations(url: string): Promise<MigrationState> {
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const availableMigrations = await listMigrationFiles();
-    const tableCountResult = await sql<{ count: number }[]>`
-      select count(*)::int as count
-      from information_schema.tables
-      where table_schema = 'public'
-        and table_type = 'BASE TABLE'
-    `;
-    const tableCount = tableCountResult[0]?.count ?? 0;
-
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-    if (!migrationTableSchema) {
-      if (tableCount > 0) {
-        return {
-          status: "needsMigrations",
-          tableCount,
-          availableMigrations,
-          appliedMigrations: [],
-          pendingMigrations: availableMigrations,
-          reason: "no-migration-journal-non-empty-db",
-        };
-      }
-
-      return {
-        status: "needsMigrations",
-        tableCount,
-        availableMigrations,
-        appliedMigrations: [],
-        pendingMigrations: availableMigrations,
-        reason: "no-migration-journal-empty-db",
-      };
-    }
-
-    const appliedMigrations = await loadAppliedMigrations(sql, migrationTableSchema, availableMigrations);
-    const pendingMigrations = availableMigrations.filter((name) => !appliedMigrations.includes(name));
-    if (pendingMigrations.length === 0) {
-      return {
-        status: "upToDate",
-        tableCount,
-        availableMigrations,
-        appliedMigrations,
-      };
-    }
-
-    return {
-      status: "needsMigrations",
-      tableCount,
-      availableMigrations,
-      appliedMigrations,
-      pendingMigrations,
-      reason: "pending-migrations",
-    };
-  } finally {
-    await sql.end();
-  }
-}
-
-export async function applyPendingMigrations(url: string): Promise<void> {
-  const initialState = await inspectMigrations(url);
-  if (initialState.status === "upToDate") return;
-
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const db = drizzlePg(sql);
-    await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  } finally {
-    await sql.end();
-  }
-
-  let state = await inspectMigrations(url);
-  if (state.status === "upToDate") return;
-
-  const repair = await reconcilePendingMigrationHistory(url);
-  if (repair.repairedMigrations.length > 0) {
-    state = await inspectMigrations(url);
-    if (state.status === "upToDate") return;
-  }
-
-  if (state.status !== "needsMigrations" || state.reason !== "pending-migrations") {
-    throw new Error("Migrations are still pending after attempted apply; run inspectMigrations for details.");
-  }
-
-  await applyPendingMigrationsManually(url, state.pendingMigrations);
-
-  const finalState = await inspectMigrations(url);
-  if (finalState.status !== "upToDate") {
-    throw new Error(
-      `Failed to apply pending migrations: ${finalState.pendingMigrations.join(", ")}`,
-    );
-  }
-}
-
-export type MigrationBootstrapResult =
-  | { migrated: true; reason: "migrated-empty-db"; tableCount: 0 }
-  | { migrated: false; reason: "already-migrated"; tableCount: number }
-  | { migrated: false; reason: "not-empty-no-migration-journal"; tableCount: number };
-
-export async function migratePostgresIfEmpty(url: string): Promise<MigrationBootstrapResult> {
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-
-    const tableCountResult = await sql<{ count: number }[]>`
-      select count(*)::int as count
-      from information_schema.tables
-      where table_schema = 'public'
-        and table_type = 'BASE TABLE'
-    `;
-
-    const tableCount = tableCountResult[0]?.count ?? 0;
-
-    if (migrationTableSchema) {
-      return { migrated: false, reason: "already-migrated", tableCount };
-    }
-
-    if (tableCount > 0) {
-      return { migrated: false, reason: "not-empty-no-migration-journal", tableCount };
-    }
-
-    const db = drizzlePg(sql);
-    await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
-
-    return { migrated: true, reason: "migrated-empty-db", tableCount: 0 };
-  } finally {
-    await sql.end();
-  }
-}
-
-export async function ensurePostgresDatabase(
-  url: string,
-  databaseName: string,
-): Promise<"created" | "exists"> {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(databaseName)) {
-    throw new Error(`Unsafe database name: ${databaseName}`);
-  }
-
-  const sql = postgres(url, { max: 1 });
-  try {
-    const existing = await sql<{ one: number }[]>`
-      select 1 as one from pg_database where datname = ${databaseName} limit 1
-    `;
-    if (existing.length > 0) return "exists";
-
-    await sql.unsafe(`create database "${databaseName}"`);
-    return "created";
-  } finally {
-    await sql.end();
-  }
+function generateCreateTableStatements(): string[] {
+  // Instead of hand-writing DDL, we use drizzle-kit push or just define them inline.
+  // For robustness, define the core tables as raw SQL.
+  return [
+    `CREATE TABLE IF NOT EXISTS "companies" (
+      "id" text PRIMARY KEY NOT NULL,
+      "name" text NOT NULL,
+      "description" text,
+      "status" text NOT NULL DEFAULT 'active',
+      "issue_prefix" text NOT NULL DEFAULT 'PAP',
+      "issue_counter" integer NOT NULL DEFAULT 0,
+      "budget_monthly_cents" integer NOT NULL DEFAULT 0,
+      "spent_monthly_cents" integer NOT NULL DEFAULT 0,
+      "require_board_approval_for_new_agents" integer NOT NULL DEFAULT 1,
+      "brand_color" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "companies_issue_prefix_idx" ON "companies" ("issue_prefix")`,
+
+    `CREATE TABLE IF NOT EXISTS "auth_users" (
+      "id" text PRIMARY KEY NOT NULL,
+      "name" text,
+      "email" text,
+      "email_verified" integer DEFAULT 0,
+      "image" text,
+      "created_at" text DEFAULT (datetime('now')),
+      "updated_at" text DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "auth_users_email_idx" ON "auth_users" ("email")`,
+
+    `CREATE TABLE IF NOT EXISTS "auth_sessions" (
+      "id" text PRIMARY KEY NOT NULL,
+      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "token" text NOT NULL,
+      "expires_at" text NOT NULL,
+      "ip_address" text,
+      "user_agent" text,
+      "created_at" text DEFAULT (datetime('now')),
+      "updated_at" text DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "auth_accounts" (
+      "id" text PRIMARY KEY NOT NULL,
+      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "account_id" text NOT NULL,
+      "provider_id" text NOT NULL,
+      "access_token" text,
+      "refresh_token" text,
+      "access_token_expires_at" text,
+      "refresh_token_expires_at" text,
+      "scope" text,
+      "id_token" text,
+      "password" text,
+      "created_at" text DEFAULT (datetime('now')),
+      "updated_at" text DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "auth_verifications" (
+      "id" text PRIMARY KEY NOT NULL,
+      "identifier" text NOT NULL,
+      "value" text NOT NULL,
+      "expires_at" text NOT NULL,
+      "created_at" text DEFAULT (datetime('now')),
+      "updated_at" text DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "instance_user_roles" (
+      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "role" text NOT NULL DEFAULT 'viewer',
+      "assigned_at" text DEFAULT (datetime('now')),
+      PRIMARY KEY ("user_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "agents" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "name" text NOT NULL,
+      "role" text NOT NULL DEFAULT 'general',
+      "title" text,
+      "icon" text,
+      "status" text NOT NULL DEFAULT 'idle',
+      "reports_to" text REFERENCES "agents"("id"),
+      "capabilities" text,
+      "adapter_type" text NOT NULL DEFAULT 'process',
+      "adapter_config" text NOT NULL DEFAULT '{}',
+      "runtime_config" text NOT NULL DEFAULT '{}',
+      "budget_monthly_cents" integer NOT NULL DEFAULT 0,
+      "spent_monthly_cents" integer NOT NULL DEFAULT 0,
+      "permissions" text NOT NULL DEFAULT '{}',
+      "last_heartbeat_at" text,
+      "metadata" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS "agents_company_status_idx" ON "agents" ("company_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "agents_company_reports_to_idx" ON "agents" ("company_id", "reports_to")`,
+
+    `CREATE TABLE IF NOT EXISTS "company_memberships" (
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "role" text NOT NULL DEFAULT 'viewer',
+      "joined_at" text DEFAULT (datetime('now')),
+      PRIMARY KEY ("company_id", "user_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "principal_permission_grants" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "principal_type" text NOT NULL,
+      "principal_id" text NOT NULL,
+      "resource_type" text NOT NULL,
+      "resource_id" text,
+      "permission" text NOT NULL,
+      "granted_at" text DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "invites" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "email" text,
+      "role" text NOT NULL DEFAULT 'viewer',
+      "token" text NOT NULL,
+      "invited_by" text REFERENCES "auth_users"("id"),
+      "accepted_at" text,
+      "expires_at" text,
+      "onboarding_config" text DEFAULT '{}',
+      "created_at" text DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "invites_token_idx" ON "invites" ("token")`,
+
+    `CREATE TABLE IF NOT EXISTS "join_requests" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "status" text NOT NULL DEFAULT 'pending',
+      "message" text,
+      "decided_by" text REFERENCES "auth_users"("id"),
+      "decided_at" text,
+      "created_at" text DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "agent_config_revisions" (
+      "id" text PRIMARY KEY NOT NULL,
+      "agent_id" text NOT NULL REFERENCES "agents"("id"),
+      "adapter_config" text NOT NULL DEFAULT '{}',
+      "runtime_config" text NOT NULL DEFAULT '{}',
+      "reason" text,
+      "created_by" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "agent_api_keys" (
+      "id" text PRIMARY KEY NOT NULL,
+      "agent_id" text NOT NULL REFERENCES "agents"("id"),
+      "name" text NOT NULL DEFAULT 'default',
+      "key_hash" text NOT NULL,
+      "key_prefix" text NOT NULL,
+      "last_used_at" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "agent_api_keys_key_hash_idx" ON "agent_api_keys" ("key_hash")`,
+
+    `CREATE TABLE IF NOT EXISTS "agent_runtime_state" (
+      "agent_id" text PRIMARY KEY NOT NULL REFERENCES "agents"("id"),
+      "session_id" text,
+      "task_key" text,
+      "last_error" text,
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "agent_task_sessions" (
+      "id" text PRIMARY KEY NOT NULL,
+      "agent_id" text NOT NULL REFERENCES "agents"("id"),
+      "task_key" text NOT NULL,
+      "session_key" text,
+      "status" text NOT NULL DEFAULT 'active',
+      "started_at" text NOT NULL DEFAULT (datetime('now')),
+      "ended_at" text
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "agent_wakeup_requests" (
+      "id" integer PRIMARY KEY AUTOINCREMENT,
+      "agent_id" text NOT NULL REFERENCES "agents"("id"),
+      "issue_id" text,
+      "reason" text,
+      "status" text NOT NULL DEFAULT 'pending',
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "processed_at" text
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "projects" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "name" text NOT NULL,
+      "description" text,
+      "status" text NOT NULL DEFAULT 'active',
+      "color" text,
+      "archived" integer DEFAULT 0,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS "projects_company_idx" ON "projects" ("company_id")`,
+
+    `CREATE TABLE IF NOT EXISTS "project_workspaces" (
+      "id" text PRIMARY KEY NOT NULL,
+      "project_id" text NOT NULL REFERENCES "projects"("id"),
+      "workspace_id" text NOT NULL,
+      "name" text,
+      "provider" text NOT NULL DEFAULT 'local',
+      "config" text NOT NULL DEFAULT '{}',
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "project_goals" (
+      "project_id" text NOT NULL REFERENCES "projects"("id"),
+      "goal_id" text NOT NULL REFERENCES "goals"("id"),
+      PRIMARY KEY ("project_id", "goal_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "goals" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "title" text NOT NULL,
+      "description" text,
+      "status" text NOT NULL DEFAULT 'active',
+      "target_date" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "issues" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "project_id" text REFERENCES "projects"("id"),
+      "identifier" text,
+      "title" text NOT NULL,
+      "body" text NOT NULL DEFAULT '',
+      "status" text NOT NULL DEFAULT 'backlog',
+      "priority" text NOT NULL DEFAULT 'medium',
+      "assigned_agent_id" text REFERENCES "agents"("id"),
+      "checked_out_by_agent_id" text REFERENCES "agents"("id"),
+      "source" text NOT NULL DEFAULT 'board',
+      "external_url" text,
+      "metadata" text,
+      "sort_order" integer NOT NULL DEFAULT 0,
+      "created_by" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_status_idx" ON "issues" ("company_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_project_idx" ON "issues" ("company_id", "project_id")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "issues_identifier_idx" ON "issues" ("identifier")`,
+
+    `CREATE TABLE IF NOT EXISTS "labels" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "name" text NOT NULL,
+      "color" text NOT NULL DEFAULT '#888888',
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "labels_company_name_idx" ON "labels" ("company_id", "name")`,
+
+    `CREATE TABLE IF NOT EXISTS "issue_labels" (
+      "issue_id" text NOT NULL REFERENCES "issues"("id"),
+      "label_id" text NOT NULL REFERENCES "labels"("id"),
+      PRIMARY KEY ("issue_id", "label_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "issue_approvals" (
+      "issue_id" text NOT NULL REFERENCES "issues"("id"),
+      "approval_id" text NOT NULL REFERENCES "approvals"("id"),
+      PRIMARY KEY ("issue_id", "approval_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "issue_comments" (
+      "id" text PRIMARY KEY NOT NULL,
+      "issue_id" text NOT NULL REFERENCES "issues"("id"),
+      "author_type" text NOT NULL DEFAULT 'user',
+      "author_id" text,
+      "body" text NOT NULL,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "issue_read_states" (
+      "issue_id" text NOT NULL REFERENCES "issues"("id"),
+      "user_id" text NOT NULL,
+      "last_read_at" text NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY ("issue_id", "user_id")
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "assets" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "type" text NOT NULL DEFAULT 'image',
+      "filename" text NOT NULL,
+      "mime_type" text,
+      "size_bytes" integer,
+      "storage_path" text NOT NULL,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "issue_attachments" (
+      "id" text PRIMARY KEY NOT NULL,
+      "issue_id" text NOT NULL REFERENCES "issues"("id"),
+      "asset_id" text NOT NULL REFERENCES "assets"("id"),
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "heartbeat_runs" (
+      "id" text PRIMARY KEY NOT NULL,
+      "agent_id" text NOT NULL REFERENCES "agents"("id"),
+      "status" text NOT NULL DEFAULT 'running',
+      "trigger" text NOT NULL DEFAULT 'scheduled',
+      "context_snapshot" text,
+      "usage_json" text,
+      "error" text,
+      "started_at" text NOT NULL DEFAULT (datetime('now')),
+      "ended_at" text
+    )`,
+    `CREATE INDEX IF NOT EXISTS "heartbeat_runs_agent_idx" ON "heartbeat_runs" ("agent_id", "started_at")`,
+
+    `CREATE TABLE IF NOT EXISTS "heartbeat_run_events" (
+      "id" text PRIMARY KEY NOT NULL,
+      "run_id" text NOT NULL REFERENCES "heartbeat_runs"("id"),
+      "kind" text NOT NULL,
+      "summary" text,
+      "payload" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "cost_events" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "agent_id" text REFERENCES "agents"("id"),
+      "project_id" text REFERENCES "projects"("id"),
+      "heartbeat_run_id" text REFERENCES "heartbeat_runs"("id"),
+      "cost_cents" integer NOT NULL DEFAULT 0,
+      "description" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "approvals" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "title" text NOT NULL,
+      "description" text,
+      "status" text NOT NULL DEFAULT 'pending',
+      "type" text NOT NULL DEFAULT 'general',
+      "requester_type" text NOT NULL DEFAULT 'agent',
+      "requester_id" text,
+      "reviewer_type" text,
+      "reviewer_id" text,
+      "payload" text,
+      "decision_note" text,
+      "decided_at" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "approval_comments" (
+      "id" text PRIMARY KEY NOT NULL,
+      "approval_id" text NOT NULL REFERENCES "approvals"("id"),
+      "author_type" text NOT NULL DEFAULT 'user',
+      "author_id" text,
+      "body" text NOT NULL,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS "activity_log" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "actor_type" text NOT NULL,
+      "actor_id" text,
+      "action" text NOT NULL,
+      "resource_type" text,
+      "resource_id" text,
+      "details" text,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS "activity_log_company_idx" ON "activity_log" ("company_id", "created_at")`,
+
+    `CREATE TABLE IF NOT EXISTS "company_secrets" (
+      "id" text PRIMARY KEY NOT NULL,
+      "company_id" text NOT NULL REFERENCES "companies"("id"),
+      "name" text NOT NULL,
+      "provider" text NOT NULL DEFAULT 'local',
+      "metadata" text DEFAULT '{}',
+      "created_at" text NOT NULL DEFAULT (datetime('now')),
+      "updated_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "company_secrets_name_idx" ON "company_secrets" ("company_id", "name")`,
+
+    `CREATE TABLE IF NOT EXISTS "company_secret_versions" (
+      "id" text PRIMARY KEY NOT NULL,
+      "secret_id" text NOT NULL REFERENCES "company_secrets"("id"),
+      "encrypted_value" text NOT NULL,
+      "version" integer NOT NULL DEFAULT 1,
+      "created_at" text NOT NULL DEFAULT (datetime('now'))
+    )`,
+  ];
 }
 
 export type Db = ReturnType<typeof createDb>;
+
+// Re-export for compatibility with existing imports
+export type MigrationState = { status: "upToDate" };
+export async function inspectMigrations(_dbPath: string): Promise<MigrationState> {
+  return { status: "upToDate" };
+}
+export async function applyPendingMigrations(_dbPath: string): Promise<void> {}
+export async function migratePostgresIfEmpty(_url: string) {
+  return { migrated: false, reason: "sqlite-mode" as const, tableCount: 0 };
+}

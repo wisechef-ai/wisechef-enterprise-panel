@@ -1,15 +1,15 @@
-import { pgTable, uuid, timestamp, index, primaryKey } from "drizzle-orm/pg-core";
+import { sqliteTable, text, index, primaryKey } from "drizzle-orm/sqlite-core";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { labels } from "./labels.js";
 
-export const issueLabels = pgTable(
+export const issueLabels = sqliteTable(
   "issue_labels",
   {
-    issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
-    labelId: uuid("label_id").notNull().references(() => labels.id, { onDelete: "cascade" }),
-    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+    labelId: text("label_id").notNull().references(() => labels.id, { onDelete: "cascade" }),
+    companyId: text("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.issueId, table.labelId], name: "issue_labels_pk" }),
