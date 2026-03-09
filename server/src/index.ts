@@ -68,7 +68,7 @@ const LOCAL_BOARD_USER_EMAIL = "local@paperclip.local";
 const LOCAL_BOARD_USER_NAME = "Board";
 
 async function ensureLocalTrustedBoardPrincipal(db: any): Promise<void> {
-  const now = new Date();
+  const now = new Date().toISOString();
   const existingUser = await db
     .select({ id: authUsers.id })
     .from(authUsers)
@@ -80,7 +80,7 @@ async function ensureLocalTrustedBoardPrincipal(db: any): Promise<void> {
       id: LOCAL_BOARD_USER_ID,
       name: LOCAL_BOARD_USER_NAME,
       email: LOCAL_BOARD_USER_EMAIL,
-      emailVerified: true,
+      emailVerified: 1,
       image: null,
       createdAt: now,
       updatedAt: now,
