@@ -17,6 +17,7 @@ import type { Request as ExpressRequest, RequestHandler } from "express";
 import { and, eq } from "drizzle-orm";
 import {
   createDb,
+  ensureSchema,
   authUsers,
   companies,
   companyMemberships,
@@ -126,6 +127,7 @@ async function ensureLocalTrustedBoardPrincipal(db: any): Promise<void> {
 const dbPath = process.env.DATABASE_PATH || "./data/enterprise.sqlite";
 logger.info({ dbPath }, "Opening SQLite database");
 const db = createDb(dbPath);
+ensureSchema(db);
 const migrationSummary: MigrationSummary = "already applied";
 const startupDbInfo = { mode: "sqlite" as const, dbPath };
 
