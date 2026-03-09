@@ -4,6 +4,7 @@ import { BookOpen, Moon, Sun } from "lucide-react";
 import { Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
+import { PersonalSidebar } from "./PersonalSidebar";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { PropertiesPanel } from "./PropertiesPanel";
@@ -19,6 +20,7 @@ import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
+import { useWorkspace } from "../context/WorkspaceContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
@@ -32,6 +34,7 @@ export function Layout() {
   const { togglePanelVisible } = usePanel();
   const { companies, loading: companiesLoading, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { theme, toggleTheme } = useTheme();
+  const { isPersonal } = useWorkspace();
   const { companyPrefix } = useParams<{ companyPrefix: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -224,7 +227,7 @@ export function Layout() {
         >
           <div className="flex flex-1 min-h-0 overflow-hidden">
             <CompanyRail />
-            <Sidebar />
+            {isPersonal ? <PersonalSidebar /> : <Sidebar />}
           </div>
           <div className="border-t border-r border-border px-3 py-2 bg-background">
             <div className="flex items-center gap-1">
@@ -258,7 +261,7 @@ export function Layout() {
                 sidebarOpen ? "w-60" : "w-0"
               )}
             >
-              <Sidebar />
+              {isPersonal ? <PersonalSidebar /> : <Sidebar />}
             </div>
           </div>
           <div className="border-t border-r border-border px-3 py-2">

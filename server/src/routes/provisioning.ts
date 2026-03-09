@@ -7,6 +7,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
+import { agentService } from "../services/agents.js";
 
 const execAsync = promisify(execCb);
 
@@ -76,6 +77,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID ?? "ba11aeeeafa20f32096559c37aa367b2";
 const CF_API_TOKEN = process.env.CF_API_TOKEN ?? "tFVkKl_lNWudXEpxDxZBXH1daAKkevLtgq2fymJb";
 const CF_ZONE_ID = process.env.CF_ZONE_ID ?? "f8b7859f5939bb3ef50165ab5edcd749";
+const PAPERCLIP_PANEL_URL = process.env.PAPERCLIP_PANEL_URL ?? "https://dev.wisechef.ai";
 
 function buildDeployCommand(payload: DeployCompanyInput) {
   const escapedSlug = shellEscapeSingleQuoted(payload.companySlug);
@@ -241,16 +243,52 @@ export function provisioningRoutes(
                 ...cfg,
                 url: wsGatewayUrl,
                 authToken: gatewayAuthToken,
+                agentId: `${payload.companySlug}-${agent.role ?? "agent"}`,
                 autoPairOnFirstConnect: true,
                 sessionKeyStrategy: "issue",
                 timeoutSec: 300,
+                paperclipApiUrl: PAPERCLIP_PANEL_URL,
               },
             })
             .where(eq(agentsTable.id, agent.id));
         }
-        console.log(`[provisioning] Updated ${agentRows.length} agent adapter configs → ${wsGatewayUrl}`);
+        console.log(`[provisioning] Updated ${agentRows.length} agent adapter configs → ${wsGatewayUrl} (panel: ${PAPERCLIP_PANEL_URL})`);
       } catch (urlErr) {
         console.warn(`[provisioning] Failed to update agent adapter configs: ${urlErr}`);
+      }
+
+      // Fix #1: Automatically create CEO API key and deploy it to the container
+      try {
+        const agents = agentService(db);
+        const ceoAgent = await db
+          .select()
+          .from(agentsTable)
+          .where(
+            and(
+              eq(agentsTable.companyId, payload.companyId),
+              eq(agentsTable.role, "ceo"),
+            ),
+          )
+          .then((rows) => rows[0] ?? null);
+
+        if (ceoAgent) {
+          const keyResult = await agents.createApiKey(ceoAgent.id, "provisioned-key");
+          const apiKeyPayload = {
+            agentId: ceoAgent.id,
+            apiKey: keyResult.token,
+            paperclipApiUrl: PAPERCLIP_PANEL_URL,
+          };
+          const containerName = defaultContainerName(payload.companySlug);
+          // Base64 encode the payload to avoid shell escaping hell
+          const b64Payload = Buffer.from(JSON.stringify(apiKeyPayload)).toString("base64");
+          const writeKeyCmd = `ssh -i '${DOCKER_SSH_KEY}' -o StrictHostKeyChecking=accept-new root@${DOCKER_HOST} "docker exec ${containerName} bash -c 'mkdir -p /root/.openclaw/workspace && echo ${b64Payload} | base64 -d > /root/.openclaw/workspace/paperclip-claimed-api-key.json && chmod 600 /root/.openclaw/workspace/paperclip-claimed-api-key.json'"`;
+          await runCommand(writeKeyCmd);
+          console.log(`[provisioning] Created and deployed CEO API key for ${ceoAgent.id}`);
+        } else {
+          console.warn(`[provisioning] No CEO agent found for company ${payload.companyId} — skipping API key creation`);
+        }
+      } catch (keyErr) {
+        console.warn(`[provisioning] Failed to create/deploy CEO API key: ${keyErr}`);
       }
 
       res.json({

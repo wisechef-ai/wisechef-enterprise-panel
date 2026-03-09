@@ -9,6 +9,7 @@ import { BreadcrumbProvider } from "./context/BreadcrumbContext";
 import { PanelProvider } from "./context/PanelContext";
 import { SidebarProvider } from "./context/SidebarContext";
 import { DialogProvider } from "./context/DialogContext";
+import { WorkspaceProvider } from "./context/WorkspaceContext";
 import { ToastProvider } from "./context/ToastContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -43,7 +44,9 @@ createRoot(document.getElementById("root")!).render(
                     <SidebarProvider>
                       <PanelProvider>
                         <DialogProvider>
-                          <App />
+                          <WorkspaceProvider>
+                            <App />
+                          </WorkspaceProvider>
                         </DialogProvider>
                       </PanelProvider>
                     </SidebarProvider>
