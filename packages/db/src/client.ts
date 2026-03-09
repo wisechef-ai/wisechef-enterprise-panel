@@ -57,7 +57,7 @@ function generateCreateTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "companies_issue_prefix_idx" ON "companies" ("issue_prefix")`,
 
-    `CREATE TABLE IF NOT EXISTS "auth_users" (
+    `CREATE TABLE IF NOT EXISTS "user" (
       "id" text PRIMARY KEY NOT NULL,
       "name" text,
       "email" text,
@@ -66,11 +66,11 @@ function generateCreateTableStatements(): string[] {
       "created_at" text DEFAULT (datetime('now')),
       "updated_at" text DEFAULT (datetime('now'))
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "auth_users_email_idx" ON "auth_users" ("email")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "auth_users_email_idx" ON "user" ("email")`,
 
-    `CREATE TABLE IF NOT EXISTS "auth_sessions" (
+    `CREATE TABLE IF NOT EXISTS "session" (
       "id" text PRIMARY KEY NOT NULL,
-      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "user_id" text NOT NULL REFERENCES "user"("id"),
       "token" text NOT NULL,
       "expires_at" text NOT NULL,
       "ip_address" text,
@@ -79,9 +79,9 @@ function generateCreateTableStatements(): string[] {
       "updated_at" text DEFAULT (datetime('now'))
     )`,
 
-    `CREATE TABLE IF NOT EXISTS "auth_accounts" (
+    `CREATE TABLE IF NOT EXISTS "account" (
       "id" text PRIMARY KEY NOT NULL,
-      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "user_id" text NOT NULL REFERENCES "user"("id"),
       "account_id" text NOT NULL,
       "provider_id" text NOT NULL,
       "access_token" text,
@@ -95,7 +95,7 @@ function generateCreateTableStatements(): string[] {
       "updated_at" text DEFAULT (datetime('now'))
     )`,
 
-    `CREATE TABLE IF NOT EXISTS "auth_verifications" (
+    `CREATE TABLE IF NOT EXISTS "verification" (
       "id" text PRIMARY KEY NOT NULL,
       "identifier" text NOT NULL,
       "value" text NOT NULL,
@@ -105,7 +105,7 @@ function generateCreateTableStatements(): string[] {
     )`,
 
     `CREATE TABLE IF NOT EXISTS "instance_user_roles" (
-      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "user_id" text NOT NULL REFERENCES "user"("id"),
       "role" text NOT NULL DEFAULT 'viewer',
       "assigned_at" text DEFAULT (datetime('now')),
       PRIMARY KEY ("user_id")
@@ -137,7 +137,7 @@ function generateCreateTableStatements(): string[] {
 
     `CREATE TABLE IF NOT EXISTS "company_memberships" (
       "company_id" text NOT NULL REFERENCES "companies"("id"),
-      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "user_id" text NOT NULL REFERENCES "user"("id"),
       "role" text NOT NULL DEFAULT 'viewer',
       "joined_at" text DEFAULT (datetime('now')),
       PRIMARY KEY ("company_id", "user_id")
@@ -160,7 +160,7 @@ function generateCreateTableStatements(): string[] {
       "email" text,
       "role" text NOT NULL DEFAULT 'viewer',
       "token" text NOT NULL,
-      "invited_by" text REFERENCES "auth_users"("id"),
+      "invited_by" text REFERENCES "user"("id"),
       "accepted_at" text,
       "expires_at" text,
       "onboarding_config" text DEFAULT '{}',
@@ -171,10 +171,10 @@ function generateCreateTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "join_requests" (
       "id" text PRIMARY KEY NOT NULL,
       "company_id" text NOT NULL REFERENCES "companies"("id"),
-      "user_id" text NOT NULL REFERENCES "auth_users"("id"),
+      "user_id" text NOT NULL REFERENCES "user"("id"),
       "status" text NOT NULL DEFAULT 'pending',
       "message" text,
-      "decided_by" text REFERENCES "auth_users"("id"),
+      "decided_by" text REFERENCES "user"("id"),
       "decided_at" text,
       "created_at" text DEFAULT (datetime('now'))
     )`,
