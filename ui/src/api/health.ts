@@ -9,9 +9,11 @@ export type HealthStatus = {
   };
 };
 
+const basePath = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+
 export const healthApi = {
   get: async (): Promise<HealthStatus> => {
-    const res = await fetch("/api/health", {
+    const res = await fetch(`${basePath}/api/health`, {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
