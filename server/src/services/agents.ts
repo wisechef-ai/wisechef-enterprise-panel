@@ -412,19 +412,19 @@ export function agentService(db: Db) {
       const existing = await getById(id);
       if (!existing) return null;
 
-      return db.transaction(async (tx) => {
-        await tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id));
-        await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id));
-        await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id));
-        await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id));
-        await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id));
-        await tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
-        await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id));
-        const deleted = await tx
+      return db.transaction((tx) => {
+        tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id)).run();
+        tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id)).run();
+        tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id)).run();
+        tx.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id)).run();
+        tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id)).run();
+        tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id)).run();
+        tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id)).run();
+        const deleted = tx
           .delete(agents)
           .where(eq(agents.id, id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         return deleted ? normalizeAgentRow(deleted) : null;
       });
     },

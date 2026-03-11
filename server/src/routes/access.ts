@@ -1981,8 +1981,8 @@ export function accessRoutes(
       const actorEmail =
         requestType === "human" ? await resolveActorEmail(db, req) : null;
       const created = !inviteAlreadyAccepted
-        ? await db.transaction(async (tx) => {
-            await tx
+        ? await db.transaction((tx) => {
+            tx
               .update(invites)
               .set({ acceptedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
               .where(
@@ -1991,9 +1991,10 @@ export function accessRoutes(
                   isNull(invites.acceptedAt),
                   isNull(invites.revokedAt)
                 )
-              );
+              )
+              .run();
 
-            const row = await tx
+            const row = tx
               .insert(joinRequests)
               .values({
                 inviteId: invite.id,
@@ -2019,7 +2020,7 @@ export function accessRoutes(
                 claimSecretExpiresAt
               })
               .returning()
-              .then((rows) => rows[0]);
+              .all()[0];
             return row;
           })
         : await db

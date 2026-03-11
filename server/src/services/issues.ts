@@ -215,10 +215,10 @@ export function deriveIssueUserContext(
   };
 }
 
-async function labelMapForIssues(dbOrTx: any, issueIds: string[]): Promise<Map<string, IssueLabelRow[]>> {
+function labelMapForIssues(dbOrTx: any, issueIds: string[]): Map<string, IssueLabelRow[]> {
   const map = new Map<string, IssueLabelRow[]>();
   if (issueIds.length === 0) return map;
-  const rows = await dbOrTx
+  const rows = dbOrTx
     .select({
       issueId: issueLabels.issueId,
       label: labels,
@@ -226,7 +226,8 @@ async function labelMapForIssues(dbOrTx: any, issueIds: string[]): Promise<Map<s
     .from(issueLabels)
     .innerJoin(labels, eq(issueLabels.labelId, labels.id))
     .where(inArray(issueLabels.issueId, issueIds))
-    .orderBy(asc(labels.name), asc(labels.id));
+    .orderBy(asc(labels.name), asc(labels.id))
+    .all();
 
   for (const row of rows) {
     const existing = map.get(row.issueId);
@@ -236,9 +237,9 @@ async function labelMapForIssues(dbOrTx: any, issueIds: string[]): Promise<Map<s
   return map;
 }
 
-async function withIssueLabels(dbOrTx: any, rows: IssueRow[]): Promise<IssueWithLabels[]> {
+function withIssueLabels(dbOrTx: any, rows: IssueRow[]): IssueWithLabels[] {
   if (rows.length === 0) return [];
-  const labelsByIssueId = await labelMapForIssues(dbOrTx, rows.map((row) => row.id));
+  const labelsByIssueId = labelMapForIssues(dbOrTx, rows.map((row) => row.id));
   return rows.map((row) => {
     const issueLabels = labelsByIssueId.get(row.id) ?? [];
     return {
@@ -338,34 +339,35 @@ export function issueService(db: Db) {
     }
   }
 
-  async function assertValidLabelIds(companyId: string, labelIds: string[], dbOrTx: any = db) {
+  function assertValidLabelIds(companyId: string, labelIds: string[], dbOrTx: any = db) {
     if (labelIds.length === 0) return;
-    const existing = await dbOrTx
+    const existing = dbOrTx
       .select({ id: labels.id })
       .from(labels)
-      .where(and(eq(labels.companyId, companyId), inArray(labels.id, labelIds)));
+      .where(and(eq(labels.companyId, companyId), inArray(labels.id, labelIds)))
+      .all();
     if (existing.length !== new Set(labelIds).size) {
       throw unprocessable("One or more labels are invalid for this company");
     }
   }
 
-  async function syncIssueLabels(
+  function syncIssueLabels(
     issueId: string,
     companyId: string,
     labelIds: string[],
     dbOrTx: any = db,
   ) {
     const deduped = [...new Set(labelIds)];
-    await assertValidLabelIds(companyId, deduped, dbOrTx);
-    await dbOrTx.delete(issueLabels).where(eq(issueLabels.issueId, issueId));
+    assertValidLabelIds(companyId, deduped, dbOrTx);
+    dbOrTx.delete(issueLabels).where(eq(issueLabels.issueId, issueId)).run();
     if (deduped.length === 0) return;
-    await dbOrTx.insert(issueLabels).values(
+    dbOrTx.insert(issueLabels).values(
       deduped.map((labelId) => ({
         issueId,
         labelId,
         companyId,
       })),
-    );
+    ).run();
   }
 
   async function isTerminalOrMissingHeartbeatRun(runId: string) {
@@ -495,7 +497,7 @@ export function issueService(db: Db) {
         .from(issues)
         .where(and(...conditions))
         .orderBy(hasSearch ? asc(searchOrder) : asc(priorityOrder), asc(priorityOrder), desc(issues.updatedAt));
-      const withLabels = await withIssueLabels(db, rows);
+      const withLabels = withIssueLabels(db, rows);
       const runMap = await activeRunMapForIssues(db, withLabels);
       const withRuns = withActiveRuns(withLabels, runMap);
       if (!contextUserId || withRuns.length === 0) {
@@ -602,7 +604,7 @@ export function issueService(db: Db) {
         .where(eq(issues.id, id))
         .then((rows) => rows[0] ?? null);
       if (!row) return null;
-      const [enriched] = await withIssueLabels(db, [row]);
+      const [enriched] = withIssueLabels(db, [row]);
       return enriched;
     },
 
@@ -613,7 +615,7 @@ export function issueService(db: Db) {
         .where(eq(issues.identifier, identifier.toUpperCase()))
         .then((rows) => rows[0] ?? null);
       if (!row) return null;
-      const [enriched] = await withIssueLabels(db, [row]);
+      const [enriched] = withIssueLabels(db, [row]);
       return enriched;
     },
 
@@ -634,12 +636,13 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
-      return db.transaction(async (tx) => {
-        const [company] = await tx
+      return db.transaction((tx) => {
+        const [company] = tx
           .update(companies)
           .set({ issueCounter: sql`${companies.issueCounter} + 1` })
           .where(eq(companies.id, companyId))
-          .returning({ issueCounter: companies.issueCounter, issuePrefix: companies.issuePrefix });
+          .returning({ issueCounter: companies.issueCounter, issuePrefix: companies.issuePrefix })
+          .all();
 
         const issueNumber = company.issueCounter;
         const identifier = `${company.issuePrefix}-${issueNumber}`;
@@ -655,11 +658,11 @@ export function issueService(db: Db) {
           values.cancelledAt = new Date().toISOString();
         }
 
-        const [issue] = await tx.insert(issues).values(values).returning();
+        const [issue] = tx.insert(issues).values(values).returning().all();
         if (inputLabelIds) {
-          await syncIssueLabels(issue.id, companyId, inputLabelIds, tx);
+          syncIssueLabels(issue.id, companyId, inputLabelIds, tx);
         }
-        const [enriched] = await withIssueLabels(tx, [issue]);
+        const [enriched] = withIssueLabels(tx, [issue]);
         return enriched;
       });
     },
@@ -718,43 +721,45 @@ export function issueService(db: Db) {
         patch.checkoutRunId = null;
       }
 
-      return db.transaction(async (tx) => {
-        const updated = await tx
+      return db.transaction((tx) => {
+        const updated = tx
           .update(issues)
           .set(patch)
           .where(eq(issues.id, id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         if (!updated) return null;
         if (nextLabelIds !== undefined) {
-          await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
+          syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
         }
-        const [enriched] = await withIssueLabels(tx, [updated]);
+        const [enriched] = withIssueLabels(tx, [updated]);
         return enriched;
       });
     },
 
     remove: (id: string) =>
-      db.transaction(async (tx) => {
-        const attachmentAssetIds = await tx
+      db.transaction((tx) => {
+        const attachmentAssetIds = tx
           .select({ assetId: issueAttachments.assetId })
           .from(issueAttachments)
-          .where(eq(issueAttachments.issueId, id));
+          .where(eq(issueAttachments.issueId, id))
+          .all();
 
-        const removedIssue = await tx
+        const removedIssue = tx
           .delete(issues)
           .where(eq(issues.id, id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (removedIssue && attachmentAssetIds.length > 0) {
-          await tx
+          tx
             .delete(assets)
-            .where(inArray(assets.id, attachmentAssetIds.map((row) => row.assetId)));
+            .where(inArray(assets.id, attachmentAssetIds.map((row) => row.assetId)))
+            .run();
         }
 
         if (!removedIssue) return null;
-        const [enriched] = await withIssueLabels(tx, [removedIssue]);
+        const [enriched] = withIssueLabels(tx, [removedIssue]);
         return enriched;
       }),
 
@@ -800,7 +805,7 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
 
       if (updated) {
-        const [enriched] = await withIssueLabels(db, [updated]);
+        const [enriched] = withIssueLabels(db, [updated]);
         return enriched;
       }
 
@@ -861,7 +866,7 @@ export function issueService(db: Db) {
         });
         if (adopted) {
           const row = await db.select().from(issues).where(eq(issues.id, id)).then((rows) => rows[0]!);
-          const [enriched] = await withIssueLabels(db, [row]);
+          const [enriched] = withIssueLabels(db, [row]);
           return enriched;
         }
       }
@@ -873,7 +878,7 @@ export function issueService(db: Db) {
         sameRunLock(current.checkoutRunId, checkoutRunId)
       ) {
         const row = await db.select().from(issues).where(eq(issues.id, id)).then((rows) => rows[0]!);
-        const [enriched] = await withIssueLabels(db, [row]);
+        const [enriched] = withIssueLabels(db, [row]);
         return enriched;
       }
 
@@ -978,7 +983,7 @@ export function issueService(db: Db) {
         .returning()
         .then((rows) => rows[0] ?? null);
       if (!updated) return null;
-      const [enriched] = await withIssueLabels(db, [updated]);
+      const [enriched] = withIssueLabels(db, [updated]);
       return enriched;
     },
 
@@ -1085,8 +1090,8 @@ export function issueService(db: Db) {
         }
       }
 
-      return db.transaction(async (tx) => {
-        const [asset] = await tx
+      return db.transaction((tx) => {
+        const [asset] = tx
           .insert(assets)
           .values({
             companyId: issue.companyId,
@@ -1099,9 +1104,10 @@ export function issueService(db: Db) {
             createdByAgentId: input.createdByAgentId ?? null,
             createdByUserId: input.createdByUserId ?? null,
           })
-          .returning();
+          .returning()
+          .all();
 
-        const [attachment] = await tx
+        const [attachment] = tx
           .insert(issueAttachments)
           .values({
             companyId: issue.companyId,
@@ -1109,7 +1115,8 @@ export function issueService(db: Db) {
             assetId: asset.id,
             issueCommentId: input.issueCommentId ?? null,
           })
-          .returning();
+          .returning()
+          .all();
 
         return {
           id: attachment.id,
@@ -1180,8 +1187,8 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null),
 
     removeAttachment: async (id: string) =>
-      db.transaction(async (tx) => {
-        const existing = await tx
+      db.transaction((tx) => {
+        const existing = tx
           .select({
             id: issueAttachments.id,
             companyId: issueAttachments.companyId,
@@ -1202,11 +1209,11 @@ export function issueService(db: Db) {
           .from(issueAttachments)
           .innerJoin(assets, eq(issueAttachments.assetId, assets.id))
           .where(eq(issueAttachments.id, id))
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         if (!existing) return null;
 
-        await tx.delete(issueAttachments).where(eq(issueAttachments.id, id));
-        await tx.delete(assets).where(eq(assets.id, existing.assetId));
+        tx.delete(issueAttachments).where(eq(issueAttachments.id, id)).run();
+        tx.delete(assets).where(eq(assets.id, existing.assetId)).run();
         return existing;
       }),
 

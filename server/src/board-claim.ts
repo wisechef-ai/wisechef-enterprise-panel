@@ -89,26 +89,27 @@ export async function claimBoardOwnership(
   const status = getChallengeStatus(opts.token, opts.code);
   if (status !== "available") return { status };
 
-  await db.transaction(async (tx) => {
-    const existingTargetAdmin = await tx
+  await db.transaction((tx) => {
+    const existingTargetAdmin = tx
       .select({ id: instanceUserRoles.id })
       .from(instanceUserRoles)
       .where(and(eq(instanceUserRoles.userId, opts.userId), eq(instanceUserRoles.role, "instance_admin")))
-      .then((rows) => rows[0] ?? null);
+      .all()[0] ?? null;
     if (!existingTargetAdmin) {
-      await tx.insert(instanceUserRoles).values({
+      tx.insert(instanceUserRoles).values({
         userId: opts.userId,
         role: "instance_admin",
-      });
+      }).run();
     }
 
-    await tx
+    tx
       .delete(instanceUserRoles)
-      .where(and(eq(instanceUserRoles.userId, LOCAL_BOARD_USER_ID), eq(instanceUserRoles.role, "instance_admin")));
+      .where(and(eq(instanceUserRoles.userId, LOCAL_BOARD_USER_ID), eq(instanceUserRoles.role, "instance_admin")))
+      .run();
 
-    const allCompanies = await tx.select({ id: companies.id }).from(companies);
+    const allCompanies = tx.select({ id: companies.id }).from(companies).all();
     for (const company of allCompanies) {
-      const existing = await tx
+      const existing = tx
         .select({ id: companyMemberships.id, status: companyMemberships.status })
         .from(companyMemberships)
         .where(
@@ -118,24 +119,25 @@ export async function claimBoardOwnership(
             eq(companyMemberships.principalId, opts.userId),
           ),
         )
-        .then((rows) => rows[0] ?? null);
+        .all()[0] ?? null;
 
       if (!existing) {
-        await tx.insert(companyMemberships).values({
+        tx.insert(companyMemberships).values({
           companyId: company.id,
           principalType: "user",
           principalId: opts.userId,
           status: "active",
           membershipRole: "owner",
-        });
+        }).run();
         continue;
       }
 
       if (existing.status !== "active") {
-        await tx
+        tx
           .update(companyMemberships)
           .set({ status: "active", membershipRole: "owner", updatedAt: new Date().toISOString() })
-          .where(eq(companyMemberships.id, existing.id));
+          .where(eq(companyMemberships.id, existing.id))
+          .run();
       }
     }
   });

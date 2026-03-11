@@ -1465,21 +1465,21 @@ export function heartbeatService(db: Db) {
   }
 
   async function releaseIssueExecutionAndPromote(run: typeof heartbeatRuns.$inferSelect) {
-    const promotedRun = await db.transaction(async (tx) => {
+    const promotedRun = await db.transaction((tx) => {
       // SQLite: no row-level locking needed (file-level lock via transaction)
 
-      const issue = await tx
+      const issue = tx
         .select({
           id: issues.id,
           companyId: issues.companyId,
         })
         .from(issues)
         .where(and(eq(issues.companyId, run.companyId), eq(issues.executionRunId, run.id)))
-        .then((rows) => rows[0] ?? null);
+        .all()[0] ?? null;
 
       if (!issue) return;
 
-      await tx
+      tx
         .update(issues)
         .set({
           executionRunId: null,
@@ -1487,10 +1487,11 @@ export function heartbeatService(db: Db) {
           executionLockedAt: null,
           updatedAt: new Date().toISOString(),
         })
-        .where(eq(issues.id, issue.id));
+        .where(eq(issues.id, issue.id))
+        .run();
 
       while (true) {
-        const deferred = await tx
+        const deferred = tx
           .select()
           .from(agentWakeupRequests)
           .where(
@@ -1502,15 +1503,15 @@ export function heartbeatService(db: Db) {
           )
           .orderBy(asc(agentWakeupRequests.requestedAt))
           .limit(1)
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!deferred) return null;
 
-        const deferredAgent = await tx
+        const deferredAgent = tx
           .select()
           .from(agents)
           .where(eq(agents.id, deferred.agentId))
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (
           !deferredAgent ||
@@ -1519,7 +1520,7 @@ export function heartbeatService(db: Db) {
           deferredAgent.status === "terminated" ||
           deferredAgent.status === "pending_approval"
         ) {
-          await tx
+          tx
             .update(agentWakeupRequests)
             .set({
               status: "failed",
@@ -1527,7 +1528,8 @@ export function heartbeatService(db: Db) {
               error: "Deferred wake could not be promoted: agent is not invokable",
               updatedAt: new Date().toISOString(),
             })
-            .where(eq(agentWakeupRequests.id, deferred.id));
+            .where(eq(agentWakeupRequests.id, deferred.id))
+            .run();
           continue;
         }
 
@@ -1553,9 +1555,37 @@ export function heartbeatService(db: Db) {
           payload: promotedPayload,
         });
 
-        const sessionBefore = await resolveSessionBeforeForWakeup(deferredAgent, promotedTaskKey);
+        const sessionBefore = promotedTaskKey
+          ? (() => {
+            const codec = getAdapterSessionCodec(deferredAgent.adapterType);
+            const existingTaskSession = tx
+              .select()
+              .from(agentTaskSessions)
+              .where(
+                and(
+                  eq(agentTaskSessions.companyId, deferredAgent.companyId),
+                  eq(agentTaskSessions.agentId, deferredAgent.id),
+                  eq(agentTaskSessions.adapterType, deferredAgent.adapterType),
+                  eq(agentTaskSessions.taskKey, promotedTaskKey),
+                ),
+              )
+              .all()[0] ?? null;
+            const parsedParams = normalizeSessionParams(
+              codec.deserialize(existingTaskSession?.sessionParamsJson ?? null),
+            );
+            return truncateDisplayId(
+              existingTaskSession?.sessionDisplayId ??
+              (codec.getDisplayId ? codec.getDisplayId(parsedParams) : null) ??
+              readNonEmptyString(parsedParams?.sessionId),
+            );
+          })()
+          : tx
+              .select()
+              .from(agentRuntimeState)
+              .where(eq(agentRuntimeState.agentId, deferredAgent.id))
+              .all()[0]?.sessionId ?? null;
         const now = new Date().toISOString();
-        const newRun = await tx
+        const newRun = tx
           .insert(heartbeatRuns)
           .values({
             companyId: deferredAgent.companyId,
@@ -1568,9 +1598,9 @@ export function heartbeatService(db: Db) {
             sessionIdBefore: sessionBefore,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx
+        tx
           .update(agentWakeupRequests)
           .set({
             status: "queued",
@@ -1581,9 +1611,10 @@ export function heartbeatService(db: Db) {
             error: null,
             updatedAt: now,
           })
-          .where(eq(agentWakeupRequests.id, deferred.id));
+          .where(eq(agentWakeupRequests.id, deferred.id))
+          .run();
 
-        await tx
+        tx
           .update(issues)
           .set({
             executionRunId: newRun.id,
@@ -1591,7 +1622,8 @@ export function heartbeatService(db: Db) {
             executionLockedAt: now,
             updatedAt: now,
           })
-          .where(eq(issues.id, issue.id));
+          .where(eq(issues.id, issue.id))
+          .run();
 
         return newRun;
       }
@@ -1679,10 +1711,10 @@ export function heartbeatService(db: Db) {
       const agentNameKey = normalizeAgentNameKey(agent.name);
       const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
 
-      const outcome = await db.transaction(async (tx) => {
+      const outcome = await db.transaction((tx) => {
         // SQLite: no row-level locking needed (file-level lock via transaction)
 
-        const issue = await tx
+        const issue = tx
           .select({
             id: issues.id,
             companyId: issues.companyId,
@@ -1691,10 +1723,10 @@ export function heartbeatService(db: Db) {
           })
           .from(issues)
           .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!issue) {
-          await tx.insert(agentWakeupRequests).values({
+          tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
             source,
@@ -1706,16 +1738,16 @@ export function heartbeatService(db: Db) {
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
             finishedAt: new Date().toISOString(),
-          });
+          }).run();
           return { kind: "skipped" as const };
         }
 
         let activeExecutionRun = issue.executionRunId
-          ? await tx
+          ? tx
             .select()
             .from(heartbeatRuns)
             .where(eq(heartbeatRuns.id, issue.executionRunId))
-            .then((rows) => rows[0] ?? null)
+            .all()[0] ?? null
           : null;
 
         if (activeExecutionRun && activeExecutionRun.status !== "queued" && activeExecutionRun.status !== "running") {
@@ -1723,7 +1755,7 @@ export function heartbeatService(db: Db) {
         }
 
         if (!activeExecutionRun && issue.executionRunId) {
-          await tx
+          tx
             .update(issues)
             .set({
               executionRunId: null,
@@ -1731,11 +1763,12 @@ export function heartbeatService(db: Db) {
               executionLockedAt: null,
               updatedAt: new Date().toISOString(),
             })
-            .where(eq(issues.id, issue.id));
+            .where(eq(issues.id, issue.id))
+            .run();
         }
 
         if (!activeExecutionRun) {
-          const legacyRun = await tx
+          const legacyRun = tx
             .select()
             .from(heartbeatRuns)
             .where(
@@ -1750,16 +1783,16 @@ export function heartbeatService(db: Db) {
               asc(heartbeatRuns.createdAt),
             )
             .limit(1)
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
 
           if (legacyRun) {
             activeExecutionRun = legacyRun;
-            const legacyAgent = await tx
+            const legacyAgent = tx
               .select({ name: agents.name })
               .from(agents)
               .where(eq(agents.id, legacyRun.agentId))
-              .then((rows) => rows[0] ?? null);
-            await tx
+              .all()[0] ?? null;
+            tx
               .update(issues)
               .set({
                 executionRunId: legacyRun.id,
@@ -1767,16 +1800,17 @@ export function heartbeatService(db: Db) {
                 executionLockedAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               })
-              .where(eq(issues.id, issue.id));
+              .where(eq(issues.id, issue.id))
+              .run();
           }
         }
 
         if (activeExecutionRun) {
-          const executionAgent = await tx
+          const executionAgent = tx
             .select({ name: agents.name })
             .from(agents)
             .where(eq(agents.id, activeExecutionRun.agentId))
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
           const executionAgentNameKey =
             normalizeAgentNameKey(issue.executionAgentNameKey) ??
             normalizeAgentNameKey(executionAgent?.name);
@@ -1792,7 +1826,7 @@ export function heartbeatService(db: Db) {
               activeExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
             );
-            const mergedRun = await tx
+            const mergedRun = tx
               .update(heartbeatRuns)
               .set({
                 contextSnapshot: mergedContextSnapshot,
@@ -1800,9 +1834,9 @@ export function heartbeatService(db: Db) {
               })
               .where(eq(heartbeatRuns.id, activeExecutionRun.id))
               .returning()
-              .then((rows) => rows[0] ?? activeExecutionRun);
+              .all()[0] ?? activeExecutionRun;
 
-            await tx.insert(agentWakeupRequests).values({
+            tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
               agentId,
               source,
@@ -1816,7 +1850,7 @@ export function heartbeatService(db: Db) {
               idempotencyKey: opts.idempotencyKey ?? null,
               runId: mergedRun.id,
               finishedAt: new Date().toISOString(),
-            });
+            }).run();
 
             return { kind: "coalesced" as const, run: mergedRun };
           }
@@ -1827,7 +1861,7 @@ export function heartbeatService(db: Db) {
             [DEFERRED_WAKE_CONTEXT_KEY]: enrichedContextSnapshot,
           };
 
-          const existingDeferred = await tx
+          const existingDeferred = tx
             .select()
             .from(agentWakeupRequests)
             .where(
@@ -1840,7 +1874,7 @@ export function heartbeatService(db: Db) {
             )
             .orderBy(asc(agentWakeupRequests.requestedAt))
             .limit(1)
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
 
           if (existingDeferred) {
             const existingDeferredPayload = parseObject(existingDeferred.payload);
@@ -1856,19 +1890,20 @@ export function heartbeatService(db: Db) {
               [DEFERRED_WAKE_CONTEXT_KEY]: mergedDeferredContext,
             };
 
-            await tx
+            tx
               .update(agentWakeupRequests)
               .set({
                 payload: mergedDeferredPayload,
                 coalescedCount: (existingDeferred.coalescedCount ?? 0) + 1,
                 updatedAt: new Date().toISOString(),
               })
-              .where(eq(agentWakeupRequests.id, existingDeferred.id));
+              .where(eq(agentWakeupRequests.id, existingDeferred.id))
+              .run();
 
             return { kind: "deferred" as const };
           }
 
-          await tx.insert(agentWakeupRequests).values({
+          tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
             source,
@@ -1879,12 +1914,12 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
-          });
+          }).run();
 
           return { kind: "deferred" as const };
         }
 
-        const wakeupRequest = await tx
+        const wakeupRequest = tx
           .insert(agentWakeupRequests)
           .values({
             companyId: agent.companyId,
@@ -1899,9 +1934,9 @@ export function heartbeatService(db: Db) {
             idempotencyKey: opts.idempotencyKey ?? null,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        const newRun = await tx
+        const newRun = tx
           .insert(heartbeatRuns)
           .values({
             companyId: agent.companyId,
@@ -1914,17 +1949,18 @@ export function heartbeatService(db: Db) {
             sessionIdBefore: sessionBefore,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx
+        tx
           .update(agentWakeupRequests)
           .set({
             runId: newRun.id,
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+          .where(eq(agentWakeupRequests.id, wakeupRequest.id))
+          .run();
 
-        await tx
+        tx
           .update(issues)
           .set({
             executionRunId: newRun.id,
@@ -1932,7 +1968,8 @@ export function heartbeatService(db: Db) {
             executionLockedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           })
-          .where(eq(issues.id, issue.id));
+          .where(eq(issues.id, issue.id))
+          .run();
 
         return { kind: "queued" as const, run: newRun };
       });

@@ -180,8 +180,8 @@ export function secretService(db: Db) {
         externalRef: input.externalRef ?? null,
       });
 
-      return db.transaction(async (tx) => {
-        const secret = await tx
+      return db.transaction((tx) => {
+        const secret = tx
           .insert(companySecrets)
           .values({
             companyId,
@@ -194,16 +194,16 @@ export function secretService(db: Db) {
             createdByUserId: actor?.userId ?? null,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx.insert(companySecretVersions).values({
+        tx.insert(companySecretVersions).values({
           secretId: secret.id,
           version: 1,
           material: prepared.material,
           valueSha256: prepared.valueSha256,
           createdByAgentId: actor?.agentId ?? null,
           createdByUserId: actor?.userId ?? null,
-        });
+        }).run();
 
         return secret;
       });
@@ -223,17 +223,17 @@ export function secretService(db: Db) {
         externalRef: input.externalRef ?? secret.externalRef ?? null,
       });
 
-      return db.transaction(async (tx) => {
-        await tx.insert(companySecretVersions).values({
+      return db.transaction((tx) => {
+        tx.insert(companySecretVersions).values({
           secretId: secret.id,
           version: nextVersion,
           material: prepared.material,
           valueSha256: prepared.valueSha256,
           createdByAgentId: actor?.agentId ?? null,
           createdByUserId: actor?.userId ?? null,
-        });
+        }).run();
 
-        const updated = await tx
+        const updated = tx
           .update(companySecrets)
           .set({
             latestVersion: nextVersion,
@@ -242,7 +242,7 @@ export function secretService(db: Db) {
           })
           .where(eq(companySecrets.id, secret.id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!updated) throw notFound("Secret not found");
         return updated;
