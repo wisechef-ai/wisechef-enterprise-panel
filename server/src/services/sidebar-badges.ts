@@ -10,7 +10,7 @@ export function sidebarBadgeService(db: Db) {
   return {
     get: async (
       companyId: string,
-      extra?: { joinRequests?: number; assignedIssues?: number },
+      extra?: { joinRequests?: number; unreadTouchedIssues?: number },
     ): Promise<SidebarBadges> => {
       const actionableApprovals = await db
         .select({ count: sql<number>`count(*)` })
@@ -24,7 +24,7 @@ export function sidebarBadgeService(db: Db) {
         .then((rows) => Number(rows[0]?.count ?? 0));
 
       const latestRunByAgent = await db
-        .selectDistinctOn([heartbeatRuns.agentId], {
+        .selectDistinct( {
           runStatus: heartbeatRuns.status,
         })
         .from(heartbeatRuns)
@@ -43,9 +43,9 @@ export function sidebarBadgeService(db: Db) {
       ).length;
 
       const joinRequests = extra?.joinRequests ?? 0;
-      const assignedIssues = extra?.assignedIssues ?? 0;
+      const unreadTouchedIssues = extra?.unreadTouchedIssues ?? 0;
       return {
-        inbox: actionableApprovals + failedRuns + joinRequests + assignedIssues,
+        inbox: actionableApprovals + failedRuns + joinRequests + unreadTouchedIssues,
         approvals: actionableApprovals,
         failedRuns,
         joinRequests,

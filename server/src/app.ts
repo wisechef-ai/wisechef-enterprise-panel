@@ -24,6 +24,7 @@ import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { llmRoutes } from "./routes/llms.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
+import { provisioningRoutes } from "./routes/provisioning.js";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 
 type UiMode = "none" | "static" | "vite-dev";
@@ -120,7 +121,39 @@ export async function createApp(
       allowedHostnames: opts.allowedHostnames,
     }),
   );
+  api.use(provisioningRoutes(db));
+
+  // Stub routes: silence noisy 404s from polling clients (board UI inside containers)
+  api.get("/usage", (_req, res) => res.json({ ok: true, usage: {} }));
+  api.get("/usage-limits", (_req, res) => res.json({ ok: true, limits: {} }));
+
+  // Telegram bot token validation via BotFather API
+  api.post("/channels/validate-token", async (req, res) => {
+    try {
+      const { token, platform } = req.body as { token?: string; platform?: string };
+      if (!token || platform !== "telegram") {
+        return res.json({ valid: false, error: "Only Telegram tokens are supported" });
+      }
+      const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const data = (await resp.json()) as { ok: boolean; result?: { username?: string } };
+      if (data.ok && data.result?.username) {
+        return res.json({ valid: true, botUsername: data.result.username });
+      }
+      return res.json({ valid: false, error: "Invalid token — bot not found" });
+    } catch {
+      return res.json({ valid: false, error: "Could not validate token" });
+    }
+  });
+
+  // Tier/plan info for onboarding wizard
+  api.get("/onboarding/tier", (_req, res) => {
+    res.json({ maxAgents: 20, plan: "enterprise" });
+  });
+
   app.use("/api", api);
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   if (opts.uiMode === "static") {
@@ -131,9 +164,10 @@ export async function createApp(
     ];
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
+      const indexHtml = fs.readFileSync(path.join(uiDist, "index.html"), "utf-8");
       app.use(express.static(uiDist));
       app.get(/.*/, (_req, res) => {
-        res.sendFile(path.join(uiDist, "index.html"));
+        res.status(200).set("Content-Type", "text/html").end(indexHtml);
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");
@@ -148,7 +182,7 @@ export async function createApp(
       appType: "spa",
       server: {
         middlewareMode: true,
-        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
+        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : true,
       },
     });
 

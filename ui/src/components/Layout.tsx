@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type UIEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Moon, Sun } from "lucide-react";
+import { BookOpen, Moon, Sun, ArrowLeft } from "lucide-react";
 import { Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
+import { PersonalSidebar } from "./PersonalSidebar";
+import { PersonalBoardView } from "./PersonalBoardView";
 import { SidebarNavItem } from "./SidebarNavItem";
 import { BreadcrumbBar } from "./BreadcrumbBar";
 import { PropertiesPanel } from "./PropertiesPanel";
@@ -19,6 +21,7 @@ import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useTheme } from "../context/ThemeContext";
+import { useWorkspace } from "../context/WorkspaceContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
@@ -32,6 +35,7 @@ export function Layout() {
   const { togglePanelVisible } = usePanel();
   const { companies, loading: companiesLoading, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { theme, toggleTheme } = useTheme();
+  const { isPersonal } = useWorkspace();
   const { companyPrefix } = useParams<{ companyPrefix: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -48,11 +52,24 @@ export function Layout() {
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;
     if (health?.deploymentMode === "authenticated") return;
-    if (companies.length === 0) {
+
+    // Auto-open wizard when: no companies exist, OR ?onboard=true (post-Stripe redirect)
+    const params = new URLSearchParams(location.search);
+    const forceOnboard = params.has("onboard") || params.has("stripe_session");
+
+    if (companies.length === 0 || forceOnboard) {
       onboardingTriggered.current = true;
+      // Clean up URL params after triggering
+      if (forceOnboard) {
+        params.delete("onboard");
+        params.delete("stripe_session");
+        params.delete("plan");
+        const clean = params.toString();
+        window.history.replaceState({}, "", location.pathname + (clean ? `?${clean}` : ""));
+      }
       openOnboarding();
     }
-  }, [companies, companiesLoading, openOnboarding, health?.deploymentMode]);
+  }, [companies, companiesLoading, openOnboarding, health?.deploymentMode, location.search]);
 
   useEffect(() => {
     if (!companyPrefix || companiesLoading || companies.length === 0) return;
@@ -211,7 +228,7 @@ export function Layout() {
         >
           <div className="flex flex-1 min-h-0 overflow-hidden">
             <CompanyRail />
-            <Sidebar />
+            {isPersonal ? <PersonalSidebar /> : <Sidebar />}
           </div>
           <div className="border-t border-r border-border px-3 py-2 bg-background">
             <div className="flex items-center gap-1">
@@ -245,7 +262,7 @@ export function Layout() {
                 sidebarOpen ? "w-60" : "w-0"
               )}
             >
-              <Sidebar />
+              {isPersonal ? <PersonalSidebar /> : <Sidebar />}
             </div>
           </div>
           <div className="border-t border-r border-border px-3 py-2">
@@ -274,18 +291,34 @@ export function Layout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 h-full">
-        <BreadcrumbBar />
-        <div className="flex flex-1 min-h-0">
-          <main
-            id="main-content"
-            tabIndex={-1}
-            className={cn("flex-1 overflow-auto p-4 md:p-6", isMobile && "pb-[calc(5rem+env(safe-area-inset-bottom))]")}
-            onScroll={handleMainScroll}
+        {/* Back to Dashboard banner */}
+        <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500/10 to-transparent border-b border-border shrink-0">
+          <a
+            href="/"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-orange-500 hover:text-orange-400 transition-colors"
           >
-            <Outlet />
-          </main>
-          <PropertiesPanel />
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </a>
         </div>
+        {isPersonal ? (
+          <PersonalBoardView />
+        ) : (
+          <>
+            <BreadcrumbBar />
+            <div className="flex flex-1 min-h-0">
+              <main
+                id="main-content"
+                tabIndex={-1}
+                className={cn("flex-1 overflow-auto p-4 md:p-6", isMobile && "pb-[calc(5rem+env(safe-area-inset-bottom))]")}
+                onScroll={handleMainScroll}
+              >
+                <Outlet />
+              </main>
+              <PropertiesPanel />
+            </div>
+          </>
+        )}
       </div>
       {isMobile && <MobileBottomNav visible={mobileNavVisible} />}
       <CommandPalette />

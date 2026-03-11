@@ -32,8 +32,8 @@ export interface CompanySecret {
   description: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SecretProviderDescriptor {

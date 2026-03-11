@@ -1,17 +1,18 @@
-import { pgTable, uuid, text, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 
-export const companyMemberships = pgTable(
+export const companyMemberships = sqliteTable(
   "company_memberships",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
     principalType: text("principal_type").notNull(),
     principalId: text("principal_id").notNull(),
     status: text("status").notNull().default("active"),
     membershipRole: text("membership_role"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyPrincipalUniqueIdx: uniqueIndex("company_memberships_company_principal_unique_idx").on(

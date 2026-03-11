@@ -25,17 +25,17 @@ export interface Agent {
   budgetMonthlyCents: number;
   spentMonthlyCents: number;
   permissions: AgentPermissions;
-  lastHeartbeatAt: Date | null;
+  lastHeartbeatAt: string | null;
   metadata: Record<string, unknown> | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentKeyCreated {
   id: string;
   name: string;
   token: string;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export interface AgentConfigRevision {
@@ -49,7 +49,7 @@ export interface AgentConfigRevision {
   changedKeys: string[];
   beforeConfig: Record<string, unknown>;
   afterConfig: Record<string, unknown>;
-  createdAt: Date;
+  createdAt: string;
 }
 
 export type AdapterEnvironmentCheckLevel = "info" | "warn" | "error";

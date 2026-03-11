@@ -1,27 +1,21 @@
-import {
-  type AnyPgColumn,
-  pgTable,
-  uuid,
-  text,
-  timestamp,
-  index,
-} from "drizzle-orm/pg-core";
+import { sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { agents } from "./agents.js";
 import { companies } from "./companies.js";
 
-export const goals = pgTable(
+export const goals = sqliteTable(
   "goals",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
     title: text("title").notNull(),
     description: text("description"),
     level: text("level").notNull().default("task"),
     status: text("status").notNull().default("planned"),
-    parentId: uuid("parent_id").references((): AnyPgColumn => goals.id),
-    ownerAgentId: uuid("owner_agent_id").references(() => agents.id),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    parentId: text("parent_id").references((): any => goals.id),
+    ownerAgentId: text("owner_agent_id").references(() => agents.id),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyIdx: index("goals_company_idx").on(table.companyId),

@@ -1,19 +1,20 @@
-import { pgTable, uuid, text, timestamp, integer, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { agents } from "./agents.js";
 import { companySecrets } from "./company_secrets.js";
 
-export const companySecretVersions = pgTable(
+export const companySecretVersions = sqliteTable(
   "company_secret_versions",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    secretId: uuid("secret_id").notNull().references(() => companySecrets.id, { onDelete: "cascade" }),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    secretId: text("secret_id").notNull().references(() => companySecrets.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
-    material: jsonb("material").$type<Record<string, unknown>>().notNull(),
+    material: text("material", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     valueSha256: text("value_sha256").notNull(),
-    createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    createdByAgentId: text("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdByUserId: text("created_by_user_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    revokedAt: text("revoked_at"),
   },
   (table) => ({
     secretIdx: index("company_secret_versions_secret_idx").on(table.secretId, table.createdAt),

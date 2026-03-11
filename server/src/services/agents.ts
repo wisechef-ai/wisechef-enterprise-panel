@@ -51,6 +51,16 @@ interface UpdateAgentOptions {
   recordRevision?: RevisionMetadata;
 }
 
+interface AgentShortnameRow {
+  id: string;
+  name: string;
+  status: string;
+}
+
+interface AgentShortnameCollisionOptions {
+  excludeAgentId?: string | null;
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -140,6 +150,37 @@ function configPatchFromSnapshot(snapshot: unknown): Partial<typeof agents.$infe
   };
 }
 
+export function hasAgentShortnameCollision(
+  candidateName: string,
+  existingAgents: AgentShortnameRow[],
+  options?: AgentShortnameCollisionOptions,
+): boolean {
+  const candidateShortname = normalizeAgentUrlKey(candidateName);
+  if (!candidateShortname) return false;
+
+  return existingAgents.some((agent) => {
+    if (agent.status === "terminated") return false;
+    if (options?.excludeAgentId && agent.id === options.excludeAgentId) return false;
+    return normalizeAgentUrlKey(agent.name) === candidateShortname;
+  });
+}
+
+export function deduplicateAgentName(
+  candidateName: string,
+  existingAgents: AgentShortnameRow[],
+): string {
+  if (!hasAgentShortnameCollision(candidateName, existingAgents)) {
+    return candidateName;
+  }
+  for (let i = 2; i <= 100; i++) {
+    const suffixed = `${candidateName} ${i}`;
+    if (!hasAgentShortnameCollision(suffixed, existingAgents)) {
+      return suffixed;
+    }
+  }
+  return `${candidateName} ${Date.now()}`;
+}
+
 export function agentService(db: Db) {
   function withUrlKey<T extends { id: string; name: string }>(row: T) {
     return {
@@ -185,6 +226,31 @@ export function agentService(db: Db) {
     }
   }
 
+  async function assertCompanyShortnameAvailable(
+    companyId: string,
+    candidateName: string,
+    options?: AgentShortnameCollisionOptions,
+  ) {
+    const candidateShortname = normalizeAgentUrlKey(candidateName);
+    if (!candidateShortname) return;
+
+    const existingAgents = await db
+      .select({
+        id: agents.id,
+        name: agents.name,
+        status: agents.status,
+      })
+      .from(agents)
+      .where(eq(agents.companyId, companyId));
+
+    const hasCollision = hasAgentShortnameCollision(candidateName, existingAgents, options);
+    if (hasCollision) {
+      throw conflict(
+        `Agent shortname '${candidateShortname}' is already in use in this company`,
+      );
+    }
+  }
+
   async function updateAgent(
     id: string,
     data: Partial<typeof agents.$inferInsert>,
@@ -212,6 +278,14 @@ export function agentService(db: Db) {
       await assertNoCycle(id, data.reportsTo);
     }
 
+    if (data.name !== undefined) {
+      const previousShortname = normalizeAgentUrlKey(existing.name);
+      const nextShortname = normalizeAgentUrlKey(data.name);
+      if (previousShortname !== nextShortname) {
+        await assertCompanyShortnameAvailable(existing.companyId, data.name, { excludeAgentId: id });
+      }
+    }
+
     const normalizedPatch = { ...data } as Partial<typeof agents.$inferInsert>;
     if (data.permissions !== undefined) {
       const role = (data.role ?? existing.role) as string;
@@ -223,7 +297,7 @@ export function agentService(db: Db) {
 
     const updated = await db
       .update(agents)
-      .set({ ...normalizedPatch, updatedAt: new Date() })
+      .set({ ...normalizedPatch, updatedAt: new Date().toISOString() })
       .where(eq(agents.id, id))
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -267,11 +341,17 @@ export function agentService(db: Db) {
         await ensureManager(companyId, data.reportsTo);
       }
 
+      const existingAgents = await db
+        .select({ id: agents.id, name: agents.name, status: agents.status })
+        .from(agents)
+        .where(eq(agents.companyId, companyId));
+      const uniqueName = deduplicateAgentName(data.name, existingAgents);
+
       const role = data.role ?? "general";
       const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
       const created = await db
         .insert(agents)
-        .values({ ...data, companyId, role, permissions: normalizedPermissions })
+        .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
         .returning()
         .then((rows) => rows[0]);
 
@@ -287,7 +367,7 @@ export function agentService(db: Db) {
 
       const updated = await db
         .update(agents)
-        .set({ status: "paused", updatedAt: new Date() })
+        .set({ status: "paused", updatedAt: new Date().toISOString() })
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
@@ -304,7 +384,7 @@ export function agentService(db: Db) {
 
       const updated = await db
         .update(agents)
-        .set({ status: "idle", updatedAt: new Date() })
+        .set({ status: "idle", updatedAt: new Date().toISOString() })
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
@@ -317,12 +397,12 @@ export function agentService(db: Db) {
 
       await db
         .update(agents)
-        .set({ status: "terminated", updatedAt: new Date() })
+        .set({ status: "terminated", updatedAt: new Date().toISOString() })
         .where(eq(agents.id, id));
 
       await db
         .update(agentApiKeys)
-        .set({ revokedAt: new Date() })
+        .set({ revokedAt: new Date().toISOString() })
         .where(eq(agentApiKeys.agentId, id));
 
       return getById(id);
@@ -332,19 +412,19 @@ export function agentService(db: Db) {
       const existing = await getById(id);
       if (!existing) return null;
 
-      return db.transaction(async (tx) => {
-        await tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id));
-        await tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id));
-        await tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id));
-        await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id));
-        await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id));
-        await tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
-        await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id));
-        const deleted = await tx
+      return db.transaction((tx) => {
+        tx.update(agents).set({ reportsTo: null }).where(eq(agents.reportsTo, id)).run();
+        tx.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.agentId, id)).run();
+        tx.delete(agentTaskSessions).where(eq(agentTaskSessions.agentId, id)).run();
+        tx.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id)).run();
+        tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id)).run();
+        tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id)).run();
+        tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id)).run();
+        const deleted = tx
           .delete(agents)
           .where(eq(agents.id, id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         return deleted ? normalizeAgentRow(deleted) : null;
       });
     },
@@ -356,7 +436,7 @@ export function agentService(db: Db) {
 
       const updated = await db
         .update(agents)
-        .set({ status: "idle", updatedAt: new Date() })
+        .set({ status: "idle", updatedAt: new Date().toISOString() })
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
@@ -372,7 +452,7 @@ export function agentService(db: Db) {
         .update(agents)
         .set({
           permissions: normalizeAgentPermissions(permissions, existing.role),
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(agents.id, id))
         .returning()
@@ -466,7 +546,7 @@ export function agentService(db: Db) {
     revokeKey: async (keyId: string) => {
       const rows = await db
         .update(agentApiKeys)
-        .set({ revokedAt: new Date() })
+        .set({ revokedAt: new Date().toISOString() })
         .where(eq(agentApiKeys.id, keyId))
         .returning();
       return rows[0] ?? null;

@@ -1,19 +1,10 @@
 export {
   createDb,
-  ensurePostgresDatabase,
+  ensureSchema,
   inspectMigrations,
   applyPendingMigrations,
-  reconcilePendingMigrationHistory,
-  type MigrationState,
-  type MigrationHistoryReconcileResult,
   migratePostgresIfEmpty,
-  type MigrationBootstrapResult,
+  type MigrationState,
   type Db,
 } from "./client.js";
-export {
-  runDatabaseBackup,
-  formatDatabaseBackupResult,
-  type RunDatabaseBackupOptions,
-  type RunDatabaseBackupResult,
-} from "./backup-lib.js";
 export * from "./schema/index.js";

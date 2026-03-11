@@ -11,8 +11,8 @@ export interface CostEvent {
   inputTokens: number;
   outputTokens: number;
   costCents: number;
-  occurredAt: Date;
-  createdAt: Date;
+  occurredAt: string;
+  createdAt: string;
 }
 
 export interface CostSummary {

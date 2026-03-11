@@ -22,7 +22,7 @@ export function costRoutes(db: Db) {
 
     const event = await costs.createEvent(companyId, {
       ...req.body,
-      occurredAt: new Date(req.body.occurredAt),
+      occurredAt: new Date(req.body.occurredAt).toISOString(),
     });
 
     const actor = getActorInfo(req);

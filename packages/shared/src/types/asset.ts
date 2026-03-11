@@ -9,8 +9,8 @@ export interface AssetImage {
   originalFilename: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
   contentPath: string;
 }
 

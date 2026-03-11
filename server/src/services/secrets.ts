@@ -180,8 +180,8 @@ export function secretService(db: Db) {
         externalRef: input.externalRef ?? null,
       });
 
-      return db.transaction(async (tx) => {
-        const secret = await tx
+      return db.transaction((tx) => {
+        const secret = tx
           .insert(companySecrets)
           .values({
             companyId,
@@ -194,16 +194,16 @@ export function secretService(db: Db) {
             createdByUserId: actor?.userId ?? null,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx.insert(companySecretVersions).values({
+        tx.insert(companySecretVersions).values({
           secretId: secret.id,
           version: 1,
           material: prepared.material,
           valueSha256: prepared.valueSha256,
           createdByAgentId: actor?.agentId ?? null,
           createdByUserId: actor?.userId ?? null,
-        });
+        }).run();
 
         return secret;
       });
@@ -223,26 +223,26 @@ export function secretService(db: Db) {
         externalRef: input.externalRef ?? secret.externalRef ?? null,
       });
 
-      return db.transaction(async (tx) => {
-        await tx.insert(companySecretVersions).values({
+      return db.transaction((tx) => {
+        tx.insert(companySecretVersions).values({
           secretId: secret.id,
           version: nextVersion,
           material: prepared.material,
           valueSha256: prepared.valueSha256,
           createdByAgentId: actor?.agentId ?? null,
           createdByUserId: actor?.userId ?? null,
-        });
+        }).run();
 
-        const updated = await tx
+        const updated = tx
           .update(companySecrets)
           .set({
             latestVersion: nextVersion,
             externalRef: prepared.externalRef,
-            updatedAt: new Date(),
+            updatedAt: new Date().toISOString(),
           })
           .where(eq(companySecrets.id, secret.id))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!updated) throw notFound("Secret not found");
         return updated;
@@ -271,7 +271,7 @@ export function secretService(db: Db) {
             patch.description === undefined ? secret.description : patch.description,
           externalRef:
             patch.externalRef === undefined ? secret.externalRef : patch.externalRef,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(companySecrets.id, secret.id))
         .returning()
@@ -308,10 +308,11 @@ export function secretService(db: Db) {
       return normalized;
     },
 
-    resolveEnvBindings: async (companyId: string, envValue: unknown) => {
+    resolveEnvBindings: async (companyId: string, envValue: unknown): Promise<{ env: Record<string, string>; secretKeys: Set<string> }> => {
       const record = asRecord(envValue);
-      if (!record) return {} as Record<string, string>;
+      if (!record) return { env: {} as Record<string, string>, secretKeys: new Set<string>() };
       const resolved: Record<string, string> = {};
+      const secretKeys = new Set<string>();
 
       for (const [key, rawBinding] of Object.entries(record)) {
         if (!ENV_KEY_RE.test(key)) {
@@ -326,20 +327,22 @@ export function secretService(db: Db) {
           resolved[key] = binding.value;
         } else {
           resolved[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
+          secretKeys.add(key);
         }
       }
-      return resolved;
+      return { env: resolved, secretKeys };
     },
 
-    resolveAdapterConfigForRuntime: async (companyId: string, adapterConfig: Record<string, unknown>) => {
+    resolveAdapterConfigForRuntime: async (companyId: string, adapterConfig: Record<string, unknown>): Promise<{ config: Record<string, unknown>; secretKeys: Set<string> }> => {
       const resolved = { ...adapterConfig };
+      const secretKeys = new Set<string>();
       if (!Object.prototype.hasOwnProperty.call(adapterConfig, "env")) {
-        return resolved;
+        return { config: resolved, secretKeys };
       }
       const record = asRecord(adapterConfig.env);
       if (!record) {
         resolved.env = {};
-        return resolved;
+        return { config: resolved, secretKeys };
       }
       const env: Record<string, string> = {};
       for (const [key, rawBinding] of Object.entries(record)) {
@@ -355,10 +358,11 @@ export function secretService(db: Db) {
           env[key] = binding.value;
         } else {
           env[key] = await resolveSecretValue(companyId, binding.secretId, binding.version);
+          secretKeys.add(key);
         }
       }
       resolved.env = env;
-      return resolved;
+      return { config: resolved, secretKeys };
     },
   };
 }

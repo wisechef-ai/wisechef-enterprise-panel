@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev-runner.mjs dev",
+    "dev": "node scripts/dev-runner.mjs watch",
     "dev:watch": "PAPERCLIP_MIGRATION_PROMPT=never node scripts/dev-runner.mjs watch",
+    "dev:once": "node scripts/dev-runner.mjs dev",
     "dev:server": "pnpm --filter @paperclipai/server dev",
     "dev:ui": "pnpm --filter @paperclipai/ui dev",
     "build": "pnpm -r build",
@@ -23,10 +24,12 @@
     "check:tokens": "node scripts/check-forbidden-tokens.mjs",
     "docs:dev": "cd docs && npx mintlify dev",
     "smoke:openclaw-join": "./scripts/smoke/openclaw-join.sh",
-    "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh"
+    "smoke:openclaw-docker-ui": "./scripts/smoke/openclaw-docker-ui.sh",
+    "smoke:openclaw-sse-standalone": "./scripts/smoke/openclaw-sse-standalone.sh"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
+    "@types/better-sqlite3": "^7.6.13",
     "esbuild": "^0.27.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
@@ -35,5 +38,16 @@
     "node": ">=20"
   },
   "packageManager": "pnpm@9.15.4",
+<<<<<<< HEAD
   "description": "WiseChef Enterprise Panel \u2014 AI agent orchestration for businesses"
+=======
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "drizzle-orm": "0.38.4"
+    }
+  }
+>>>>>>> stabilization/2603
 }

@@ -1,19 +1,20 @@
-import { pgTable, uuid, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { assets } from "./assets.js";
 import { issueComments } from "./issue_comments.js";
 
-export const issueAttachments = pgTable(
+export const issueAttachments = sqliteTable(
   "issue_attachments",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    issueId: uuid("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
-    assetId: uuid("asset_id").notNull().references(() => assets.id, { onDelete: "cascade" }),
-    issueCommentId: uuid("issue_comment_id").references(() => issueComments.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+    assetId: text("asset_id").notNull().references(() => assets.id, { onDelete: "cascade" }),
+    issueCommentId: text("issue_comment_id").references(() => issueComments.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyIssueIdx: index("issue_attachments_company_issue_idx").on(table.companyId, table.issueId),

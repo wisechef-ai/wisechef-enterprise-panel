@@ -1,212 +1,348 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AdapterEnvironmentTestResult } from "@paperclipai/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { companiesApi } from "../api/companies";
 import { goalsApi } from "../api/goals";
 import { agentsApi } from "../api/agents";
-import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { Dialog, DialogPortal } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger
-} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "../lib/utils";
-import { getUIAdapter } from "../adapters";
-import { defaultCreateValues } from "./agent-config-defaults";
-import {
-  DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
-  DEFAULT_CODEX_LOCAL_MODEL
-} from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
-import { DEFAULT_OPENCODE_LOCAL_MODEL } from "@paperclipai/adapter-opencode-local";
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
-import { ChoosePathButton } from "./PathInstructionsModal";
-import { HintIcon } from "./agent-config-primitives";
 import {
   Building2,
   Bot,
-  Code,
-  ListTodo,
-  Rocket,
-  ArrowLeft,
-  ArrowRight,
-  Terminal,
-  Globe,
-  Sparkles,
-  MousePointer2,
   Check,
   Loader2,
-  FolderOpen,
+  ArrowLeft,
+  ArrowRight,
+  Sparkles,
+  X,
+  Crown,
+  Code,
+  TrendingUp,
+  Server,
+  ShoppingCart,
+  Headphones,
+  Users,
+  Calculator,
+  Scale,
+  Package,
+  Palette,
+  PenTool,
+  BarChart3,
+  Settings,
+  Shield,
+  Bug,
+  MessageCircle,
+  Handshake,
   ChevronDown,
-  X
+  ChevronUp,
+  Send,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 
-type Step = 1 | 2 | 3 | 4;
-type AdapterType =
-  | "claude_local"
-  | "codex_local"
-  | "opencode_local"
-  | "cursor"
-  | "process"
-  | "http"
-  | "openclaw";
+type Step = 1 | 2 | 3;
 
-const DEFAULT_TASK_DESCRIPTION = `Setup yourself as the CEO. Use the ceo persona found here: [https://github.com/wisechef-ai/companies/blob/main/default/ceo/AGENTS.md](https://github.com/wisechef-ai/companies/blob/main/default/ceo/AGENTS.md)
+type Industry =
+  | "Tech"
+  | "Retail"
+  | "Healthcare"
+  | "Education"
+  | "Finance"
+  | "Manufacturing"
+  | "Services"
+  | "Other";
 
-Ensure you have a folder agents/ceo and then download this AGENTS.md as well as the sibling HEARTBEAT.md, SOUL.md, and TOOLS.md. and set that AGENTS.md as the path to your agents instruction file
+interface AgentRole {
+  id: string;
+  name: string;
+  icon: React.ElementType;
+  description: string;
+  category: "leadership" | "engineering" | "growth" | "operations" | "support";
+}
 
-And after you've finished that, hire yourself a Founding Engineer agent`;
+const INDUSTRIES: Industry[] = [
+  "Tech",
+  "Retail",
+  "Healthcare",
+  "Education",
+  "Finance",
+  "Manufacturing",
+  "Services",
+  "Other",
+];
+
+const INDUSTRY_TEAM_SUGGESTIONS: Record<Industry, string[]> = {
+  Tech: ["ceo", "engineer", "growth", "devops"],
+  Retail: ["ceo", "sales", "content", "support"],
+  Healthcare: ["ceo", "operations", "legal", "support"],
+  Education: ["ceo", "content", "community", "support"],
+  Finance: ["ceo", "finance", "security", "operations"],
+  Manufacturing: ["ceo", "engineer", "operations", "qa"],
+  Services: ["ceo", "sales", "growth", "operations"],
+  Other: ["ceo"],
+};
+
+const DEFAULT_MAX_AGENTS = 20;
+
+const AGENT_ROLES: AgentRole[] = [
+  { id: "ceo", name: "CEO", icon: Crown, description: "Strategic oversight, company goals, agent coordination & hiring", category: "leadership" },
+  { id: "product", name: "Product", icon: Package, description: "Product roadmap, feature prioritization, user research synthesis", category: "leadership" },
+  { id: "engineer", name: "Engineer", icon: Code, description: "Code implementation, architecture decisions, PR reviews & debugging", category: "engineering" },
+  { id: "devops", name: "DevOps", icon: Server, description: "Infrastructure, CI/CD pipelines, monitoring, deployments & uptime", category: "engineering" },
+  { id: "security", name: "Security", icon: Shield, description: "Security audits, vulnerability scanning, access policies & compliance", category: "engineering" },
+  { id: "qa", name: "QA", icon: Bug, description: "Test planning, automated testing, quality assurance & regression tracking", category: "engineering" },
+  { id: "growth", name: "Growth", icon: TrendingUp, description: "Marketing campaigns, SEO, social media, content strategy & analytics", category: "growth" },
+  { id: "sales", name: "Sales", icon: ShoppingCart, description: "Lead generation, outreach, pipeline management & deal closing", category: "growth" },
+  { id: "content", name: "Content", icon: PenTool, description: "Blog posts, documentation, newsletters, copywriting & brand voice", category: "growth" },
+  { id: "community", name: "Community", icon: MessageCircle, description: "Community engagement, forum moderation, user feedback loops", category: "growth" },
+  { id: "partnerships", name: "Partnerships", icon: Handshake, description: "Partnership outreach, integration deals, co-marketing & alliances", category: "growth" },
+  { id: "hr", name: "HR", icon: Users, description: "Hiring pipelines, onboarding, culture & team health", category: "operations" },
+  { id: "finance", name: "Finance", icon: Calculator, description: "Budgeting, expense tracking, financial reporting & forecasting", category: "operations" },
+  { id: "legal", name: "Legal", icon: Scale, description: "Contract review, compliance, privacy policies & terms of service", category: "operations" },
+  { id: "operations", name: "Operations", icon: Settings, description: "Process optimization, internal tooling, workflow automation", category: "operations" },
+  { id: "data", name: "Data Analyst", icon: BarChart3, description: "Data pipelines, dashboards, metrics analysis & business intelligence", category: "operations" },
+  { id: "support", name: "Support", icon: Headphones, description: "Customer support, ticket triage, knowledge base & SLA management", category: "support" },
+  { id: "design", name: "Design", icon: Palette, description: "UI/UX design, brand assets, prototyping & design system maintenance", category: "support" },
+];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  leadership: "Leadership",
+  engineering: "Engineering",
+  growth: "Growth & Revenue",
+  operations: "Operations",
+  support: "Support & Design",
+};
+
+const CATEGORY_ORDER = ["leadership", "engineering", "growth", "operations", "support"];
+
+function parseTierAgentLimit(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const data = payload as Record<string, unknown>;
+  for (const key of ["maxAgents", "agentLimit", "max_agents"]) {
+    const v = data[key];
+    if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+  }
+  return null;
+}
+
+function applyIndustrySuggestion(industry: Industry, maxAgents: number): Set<string> {
+  const suggested = INDUSTRY_TEAM_SUGGESTIONS[industry] ?? ["ceo"];
+  const next = new Set<string>(["ceo"]);
+  for (const roleId of suggested) {
+    if (next.size >= maxAgents) break;
+    next.add(roleId);
+  }
+  return next;
+}
+
+function slugify(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
-  const { selectedCompanyId, companies, setSelectedCompanyId } = useCompany();
+  const { setSelectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const initialStep = onboardingOptions.initialStep ?? 1;
-  const existingCompanyId = onboardingOptions.companyId;
+  // Restore wizard progress from sessionStorage
+  const savedProgress = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem("wisechef_onboarding");
+      if (raw) return JSON.parse(raw) as {
+        step?: number;
+        companyId?: string;
+        companyName?: string;
+        companyDescription?: string;
+        industry?: Industry;
+        roles?: string[];
+      };
+    } catch { /* ignore */ }
+    return null;
+  }, []);
+
+  const initialStep = (onboardingOptions.initialStep === 2 ? 2 : (savedProgress?.step ?? 1)) as Step;
+  const existingCompanyId = onboardingOptions.companyId ?? savedProgress?.companyId ?? null;
 
   const [step, setStep] = useState<Step>(initialStep);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [modelOpen, setModelOpen] = useState(false);
 
   // Step 1
-  const [companyName, setCompanyName] = useState("");
-  const [companyGoal, setCompanyGoal] = useState("");
+  const [companyName, setCompanyName] = useState(savedProgress?.companyName ?? "");
+  const [companyDescription, setCompanyDescription] = useState(savedProgress?.companyDescription ?? "");
+  const [companyIndustry, setCompanyIndustry] = useState<Industry>(savedProgress?.industry ?? "Tech");
 
   // Step 2
-  const [agentName, setAgentName] = useState("CEO");
-  const [adapterType, setAdapterType] = useState<AdapterType>("claude_local");
-  const [cwd, setCwd] = useState("");
-  const [model, setModel] = useState("");
-  const [command, setCommand] = useState("");
-  const [args, setArgs] = useState("");
-  const [url, setUrl] = useState("");
-  const [adapterEnvResult, setAdapterEnvResult] =
-    useState<AdapterEnvironmentTestResult | null>(null);
-  const [adapterEnvError, setAdapterEnvError] = useState<string | null>(null);
-  const [adapterEnvLoading, setAdapterEnvLoading] = useState(false);
-  const [forceUnsetAnthropicApiKey, setForceUnsetAnthropicApiKey] =
-    useState(false);
-  const [unsetAnthropicLoading, setUnsetAnthropicLoading] = useState(false);
+  const [addMoreRolesOpen, setAddMoreRolesOpen] = useState(false);
+  const [selectedRoles, setSelectedRoles] = useState<Set<string>>(
+    savedProgress?.roles ? new Set(savedProgress.roles) : applyIndustrySuggestion("Tech", DEFAULT_MAX_AGENTS),
+  );
 
   // Step 3
-  const [taskTitle, setTaskTitle] = useState("Create your CEO HEARTBEAT.md");
-  const [taskDescription, setTaskDescription] = useState(
-    DEFAULT_TASK_DESCRIPTION
-  );
+  const [botTokens, setBotTokens] = useState<Record<string, string>>({});
+  const [tokenValidation, setTokenValidation] = useState<Record<string, {
+    valid: boolean;
+    botUsername?: string;
+    error?: string;
+    loading?: boolean;
+  }>>({});
+  const [teamBotsOpen, setTeamBotsOpen] = useState(false);
+  const [deploymentStatus, setDeploymentStatus] = useState<"idle" | "deploying" | "ready" | "error">("idle");
 
-  // Auto-grow textarea for task description
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const autoResizeTextarea = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, []);
+  // Created entity tracking
+  const [createdCompanyId, setCreatedCompanyId] = useState<string | null>(existingCompanyId);
+  const [maxAgents, setMaxAgents] = useState(DEFAULT_MAX_AGENTS);
 
-  // Created entity IDs — pre-populate from existing company when skipping step 1
-  const [createdCompanyId, setCreatedCompanyId] = useState<string | null>(
-    existingCompanyId ?? null
-  );
-  const [createdCompanyPrefix, setCreatedCompanyPrefix] = useState<
-    string | null
-  >(null);
-  const [createdAgentId, setCreatedAgentId] = useState<string | null>(null);
-  const [createdIssueRef, setCreatedIssueRef] = useState<string | null>(null);
-
-  // Sync step and company when onboarding opens with options.
-  // Keep this independent from company-list refreshes so Step 1 completion
-  // doesn't get reset after creating a company.
   useEffect(() => {
     if (!onboardingOpen) return;
-    const cId = onboardingOptions.companyId ?? null;
-    setStep(onboardingOptions.initialStep ?? 1);
-    setCreatedCompanyId(cId);
-    setCreatedCompanyPrefix(null);
-  }, [
-    onboardingOpen,
-    onboardingOptions.companyId,
-    onboardingOptions.initialStep
-  ]);
+    if (!savedProgress) {
+      setStep(initialStep);
+      setLoading(false);
+      setError(null);
+      setCompanyName("");
+      setCompanyDescription("");
+      setCompanyIndustry("Tech");
+      setCreatedCompanyId(existingCompanyId);
+      setMaxAgents(DEFAULT_MAX_AGENTS);
+      setAddMoreRolesOpen(false);
+      setSelectedRoles(applyIndustrySuggestion("Tech", DEFAULT_MAX_AGENTS));
+      setBotTokens({});
+      setTokenValidation({});
+      setDeploymentStatus("idle");
+    }
+  }, [onboardingOpen, initialStep, existingCompanyId, savedProgress]);
 
-  // Backfill issue prefix for an existing company once companies are loaded.
+  // Persist progress
   useEffect(() => {
-    if (!onboardingOpen || !createdCompanyId || createdCompanyPrefix) return;
-    const company = companies.find((c) => c.id === createdCompanyId);
-    if (company) setCreatedCompanyPrefix(company.issuePrefix);
-  }, [onboardingOpen, createdCompanyId, createdCompanyPrefix, companies]);
+    if (!onboardingOpen) return;
+    sessionStorage.setItem("wisechef_onboarding", JSON.stringify({
+      step,
+      companyId: createdCompanyId,
+      companyName,
+      companyDescription,
+      industry: companyIndustry,
+      roles: Array.from(selectedRoles),
+    }));
+  }, [onboardingOpen, step, createdCompanyId, companyName, companyDescription, companyIndustry, selectedRoles]);
 
-  // Resize textarea when step 3 is shown or description changes
+  // Fetch tier limits
   useEffect(() => {
-    if (step === 3) autoResizeTextarea();
-  }, [step, taskDescription, autoResizeTextarea]);
+    if (!onboardingOpen) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch("/api/onboarding/tier", { credentials: "include", signal: controller.signal });
+        if (!res.ok) return;
+        const payload = await res.json() as unknown;
+        const limit = parseTierAgentLimit(payload);
+        if (limit) setMaxAgents(limit);
+      } catch { /* ignore */ }
+    })();
+    return () => controller.abort();
+  }, [onboardingOpen]);
 
-  const { data: adapterModels } = useQuery({
-    queryKey: ["adapter-models", adapterType],
-    queryFn: () => agentsApi.adapterModels(adapterType),
-    enabled: onboardingOpen && step === 2
-  });
-  const isLocalAdapter =
-    adapterType === "claude_local" || adapterType === "codex_local" || adapterType === "opencode_local" || adapterType === "cursor";
-  const effectiveAdapterCommand =
-    command.trim() ||
-    (adapterType === "codex_local"
-      ? "codex"
-      : adapterType === "cursor"
-        ? "agent"
-      : adapterType === "opencode_local"
-        ? "opencode"
-        : "claude");
-
+  // Clamp selections to maxAgents
   useEffect(() => {
-    if (step !== 2) return;
-    setAdapterEnvResult(null);
-    setAdapterEnvError(null);
-  }, [step, adapterType, cwd, model, command, args, url]);
+    setSelectedRoles((prev) => {
+      if (prev.size <= maxAgents) return prev;
+      const next = new Set<string>(["ceo"]);
+      for (const role of AGENT_ROLES) {
+        if (role.id === "ceo") continue;
+        if (prev.has(role.id)) {
+          if (next.size >= maxAgents) break;
+          next.add(role.id);
+        }
+      }
+      return next;
+    });
+  }, [maxAgents]);
 
-  const selectedModel = (adapterModels ?? []).find((m) => m.id === model);
-  const hasAnthropicApiKeyOverrideCheck =
-    adapterEnvResult?.checks.some(
-      (check) =>
-        check.code === "claude_anthropic_api_key_overrides_subscription"
-    ) ?? false;
-  const shouldSuggestUnsetAnthropicApiKey =
-    adapterType === "claude_local" &&
-    adapterEnvResult?.status === "fail" &&
-    hasAnthropicApiKeyOverrideCheck;
+  const suggestedRoles = useMemo(
+    () => AGENT_ROLES.filter((r) => (INDUSTRY_TEAM_SUGGESTIONS[companyIndustry] ?? []).includes(r.id)),
+    [companyIndustry],
+  );
+  const suggestedRoleIdSet = useMemo(
+    () => new Set(INDUSTRY_TEAM_SUGGESTIONS[companyIndustry] ?? []),
+    [companyIndustry],
+  );
+  const additionalRolesByCategory = useMemo(
+    () => CATEGORY_ORDER.map((category) => ({
+      category,
+      roles: AGENT_ROLES.filter((r) => r.category === category && !suggestedRoleIdSet.has(r.id)),
+    })),
+    [suggestedRoleIdSet],
+  );
+
+  const toggleRole = useCallback((roleId: string) => {
+    setSelectedRoles((prev) => {
+      if (roleId === "ceo") return prev; // CEO always required
+      const next = new Set(prev);
+      if (next.has(roleId)) {
+        next.delete(roleId);
+      } else {
+        if (next.size >= maxAgents) return prev;
+        next.add(roleId);
+      }
+      return next;
+    });
+  }, [maxAgents]);
+
+  function handleIndustryChange(industry: Industry) {
+    setCompanyIndustry(industry);
+    setSelectedRoles(applyIndustrySuggestion(industry, maxAgents));
+  }
+
+  async function validateToken(roleId: string, token: string) {
+    if (!token.trim()) {
+      setTokenValidation((prev) => { const next = { ...prev }; delete next[roleId]; return next; });
+      return;
+    }
+    setTokenValidation((prev) => ({ ...prev, [roleId]: { valid: false, loading: true } }));
+    try {
+      const res = await fetch("/api/channels/validate-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ token: token.trim(), platform: "telegram" }),
+      });
+      const data = await res.json() as { valid: boolean; botUsername?: string; error?: string };
+      setTokenValidation((prev) => ({ ...prev, [roleId]: { valid: data.valid, botUsername: data.botUsername, error: data.error } }));
+    } catch {
+      setTokenValidation((prev) => ({ ...prev, [roleId]: { valid: false, error: "Network error" } }));
+    }
+  }
+
+  function handleTokenChange(roleId: string, value: string) {
+    setBotTokens((prev) => ({ ...prev, [roleId]: value }));
+    if (value.trim().length > 10) {
+      void validateToken(roleId, value.trim());
+    } else {
+      setTokenValidation((prev) => { const next = { ...prev }; delete next[roleId]; return next; });
+    }
+  }
 
   function reset() {
     setStep(1);
     setLoading(false);
     setError(null);
     setCompanyName("");
-    setCompanyGoal("");
-    setAgentName("CEO");
-    setAdapterType("claude_local");
-    setCwd("");
-    setModel("");
-    setCommand("");
-    setArgs("");
-    setUrl("");
-    setAdapterEnvResult(null);
-    setAdapterEnvError(null);
-    setAdapterEnvLoading(false);
-    setForceUnsetAnthropicApiKey(false);
-    setUnsetAnthropicLoading(false);
-    setTaskTitle("Create your CEO HEARTBEAT.md");
-    setTaskDescription(DEFAULT_TASK_DESCRIPTION);
+    setCompanyDescription("");
+    setCompanyIndustry("Tech");
     setCreatedCompanyId(null);
-    setCreatedCompanyPrefix(null);
-    setCreatedAgentId(null);
-    setCreatedIssueRef(null);
+    setSelectedRoles(applyIndustrySuggestion("Tech", DEFAULT_MAX_AGENTS));
+    setAddMoreRolesOpen(false);
+    setMaxAgents(DEFAULT_MAX_AGENTS);
+    setBotTokens({});
+    setTokenValidation({});
+    setDeploymentStatus("idle");
+    sessionStorage.removeItem("wisechef_onboarding");
   }
 
   function handleClose() {
@@ -214,94 +350,27 @@ export function OnboardingWizard() {
     closeOnboarding();
   }
 
-  function buildAdapterConfig(): Record<string, unknown> {
-    const adapter = getUIAdapter(adapterType);
-    const config = adapter.buildAdapterConfig({
-      ...defaultCreateValues,
-      adapterType,
-      cwd,
-      model:
-        adapterType === "codex_local"
-          ? model || DEFAULT_CODEX_LOCAL_MODEL
-          : adapterType === "cursor"
-            ? model || DEFAULT_CURSOR_LOCAL_MODEL
-          : adapterType === "opencode_local"
-            ? model || DEFAULT_OPENCODE_LOCAL_MODEL
-          : model,
-      command,
-      args,
-      url,
-      dangerouslySkipPermissions: adapterType === "claude_local",
-      dangerouslyBypassSandbox:
-        adapterType === "codex_local"
-          ? DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX
-          : defaultCreateValues.dangerouslyBypassSandbox
-    });
-    if (adapterType === "claude_local" && forceUnsetAnthropicApiKey) {
-      const env =
-        typeof config.env === "object" &&
-        config.env !== null &&
-        !Array.isArray(config.env)
-          ? { ...(config.env as Record<string, unknown>) }
-          : {};
-      env.ANTHROPIC_API_KEY = { type: "plain", value: "" };
-      config.env = env;
-    }
-    return config;
-  }
-
-  async function runAdapterEnvironmentTest(
-    adapterConfigOverride?: Record<string, unknown>
-  ): Promise<AdapterEnvironmentTestResult | null> {
-    if (!createdCompanyId) {
-      setAdapterEnvError(
-        "Create or select a company before testing adapter environment."
-      );
-      return null;
-    }
-    setAdapterEnvLoading(true);
-    setAdapterEnvError(null);
-    try {
-      const result = await agentsApi.testEnvironment(
-        createdCompanyId,
-        adapterType,
-        {
-          adapterConfig: adapterConfigOverride ?? buildAdapterConfig()
-        }
-      );
-      setAdapterEnvResult(result);
-      return result;
-    } catch (err) {
-      setAdapterEnvError(
-        err instanceof Error ? err.message : "Adapter environment test failed"
-      );
-      return null;
-    } finally {
-      setAdapterEnvLoading(false);
-    }
-  }
-
   async function handleStep1Next() {
+    if (!companyName.trim() || !companyDescription.trim()) return;
     setLoading(true);
     setError(null);
     try {
-      const company = await companiesApi.create({ name: companyName.trim() });
+      const company = await companiesApi.create({
+        name: companyName.trim(),
+        description: companyDescription.trim(),
+      });
       setCreatedCompanyId(company.id);
-      setCreatedCompanyPrefix(company.issuePrefix);
       setSelectedCompanyId(company.id);
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
 
-      if (companyGoal.trim()) {
-        await goalsApi.create(company.id, {
-          title: companyGoal.trim(),
-          level: "company",
-          status: "active"
-        });
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.goals.list(company.id)
-        });
-      }
+      await goalsApi.create(company.id, {
+        title: companyDescription.trim(),
+        level: "company",
+        status: "active",
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.goals.list(company.id) });
 
+      setSelectedRoles(applyIndustrySuggestion(companyIndustry, maxAgents));
       setStep(2);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create company");
@@ -310,161 +379,114 @@ export function OnboardingWizard() {
     }
   }
 
-  async function handleStep2Next() {
-    if (!createdCompanyId) return;
-    setLoading(true);
+  function handleStep2Next() {
     setError(null);
-    try {
-      if (isLocalAdapter) {
-        const result = adapterEnvResult ?? (await runAdapterEnvironmentTest());
-        if (!result) return;
-      }
-
-      const agent = await agentsApi.create(createdCompanyId, {
-        name: agentName.trim(),
-        role: "ceo",
-        adapterType,
-        adapterConfig: buildAdapterConfig(),
-        runtimeConfig: {
-          heartbeat: {
-            enabled: true,
-            intervalSec: 3600,
-            wakeOnDemand: true,
-            cooldownSec: 10,
-            maxConcurrentRuns: 1
-          }
-        }
-      });
-      setCreatedAgentId(agent.id);
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.agents.list(createdCompanyId)
-      });
-      setStep(3);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create agent");
-    } finally {
-      setLoading(false);
-    }
+    setStep(3);
   }
 
-  async function handleUnsetAnthropicApiKey() {
-    if (!createdCompanyId || unsetAnthropicLoading) return;
-    setUnsetAnthropicLoading(true);
+  async function handleLaunchTeam() {
+    if (!createdCompanyId) {
+      setError("No company selected");
+      return;
+    }
+    setLoading(true);
     setError(null);
-    setAdapterEnvError(null);
-    setForceUnsetAnthropicApiKey(true);
-
-    const configWithUnset = (() => {
-      const config = buildAdapterConfig();
-      const env =
-        typeof config.env === "object" &&
-        config.env !== null &&
-        !Array.isArray(config.env)
-          ? { ...(config.env as Record<string, unknown>) }
-          : {};
-      env.ANTHROPIC_API_KEY = { type: "plain", value: "" };
-      config.env = env;
-      return config;
-    })();
+    setDeploymentStatus("deploying");
 
     try {
-      if (createdAgentId) {
-        await agentsApi.update(
-          createdAgentId,
-          { adapterConfig: configWithUnset },
-          createdCompanyId
-        );
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.agents.list(createdCompanyId)
+      const companySlug = slugify(companyName);
+      const gatewayUrl = `wss://${companySlug}.wisechef.ai/gateway`;
+
+      // Create all agents in Paperclip DB
+      const selected = AGENT_ROLES.filter((r) => selectedRoles.has(r.id));
+      const createdAgents: Array<{ id: string; role: string; name: string }> = [];
+
+      for (const role of selected) {
+        const agent = await agentsApi.create(createdCompanyId, {
+          name: role.name,
+          role: role.id,
+          adapterType: "openclaw_gateway",
+          adapterConfig: {
+            url: gatewayUrl,
+            authToken: "", // filled by provisioning from gateway token
+            agentId: `${companySlug}-${role.id}`,
+            autoPairOnFirstConnect: true,
+            sessionKeyStrategy: "issue",
+            timeoutSec: 300,
+          },
+          runtimeConfig: {
+            heartbeat: {
+              enabled: true,
+              intervalSec: 3600,
+              wakeOnDemand: true,
+              cooldownSec: 10,
+              maxConcurrentRuns: 1,
+            },
+          },
         });
+        createdAgents.push({ id: agent.id, role: role.id, name: role.name });
       }
 
-      const result = await runAdapterEnvironmentTest(configWithUnset);
-      if (result?.status === "fail") {
-        setError(
-          "Retried with ANTHROPIC_API_KEY unset in adapter config, but the environment test is still failing."
-        );
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to unset ANTHROPIC_API_KEY and retry."
-      );
-    } finally {
-      setUnsetAnthropicLoading(false);
-    }
-  }
+      queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(createdCompanyId) });
 
-  async function handleStep3Next() {
-    if (!createdCompanyId || !createdAgentId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const issue = await issuesApi.create(createdCompanyId, {
-        title: taskTitle.trim(),
-        ...(taskDescription.trim()
-          ? { description: taskDescription.trim() }
-          : {}),
-        assigneeAgentId: createdAgentId,
-        status: "todo"
-      });
-      setCreatedIssueRef(issue.identifier ?? issue.id);
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.issues.list(createdCompanyId)
-      });
-      setStep(4);
+      // Trigger Docker provisioning
+      try {
+        const provRes = await fetch("/api/provisioning/deploy-company", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            companyId: createdCompanyId,
+            companySlug,
+            companyName: companyName.trim(),
+            companyDescription: companyDescription.trim(),
+            plan: "enterprise",
+            agents: createdAgents,
+            botTokens: Object.fromEntries(
+              Object.entries(botTokens).filter(([, v]) => v.trim().length > 10),
+            ),
+          }),
+        });
+
+        if (provRes.ok) {
+          setDeploymentStatus("ready");
+        } else {
+          console.warn("[wisechef] provisioning non-ok, continuing", await provRes.text());
+          setDeploymentStatus("error");
+        }
+      } catch (provErr) {
+        console.warn("[wisechef] provisioning error (non-fatal)", provErr);
+        setDeploymentStatus("error");
+      }
+
+      handleClose();
+      navigate(`/${createdCompanyId}/agents`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create task");
+      setDeploymentStatus("error");
+      setError(err instanceof Error ? err.message : "Failed to launch team");
     } finally {
       setLoading(false);
     }
-  }
-
-  async function handleLaunch() {
-    if (!createdAgentId) return;
-    setLoading(true);
-    setError(null);
-    setLoading(false);
-    reset();
-    closeOnboarding();
-    if (createdCompanyPrefix && createdIssueRef) {
-      navigate(`/${createdCompanyPrefix}/issues/${createdIssueRef}`);
-      return;
-    }
-    if (createdCompanyPrefix) {
-      navigate(`/${createdCompanyPrefix}/dashboard`);
-      return;
-    }
-    navigate("/dashboard");
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      if (step === 1 && companyName.trim()) handleStep1Next();
-      else if (step === 2 && agentName.trim()) handleStep2Next();
-      else if (step === 3 && taskTitle.trim()) handleStep3Next();
-      else if (step === 4) handleLaunch();
-    }
+    if (e.key !== "Enter" || (!e.metaKey && !e.ctrlKey)) return;
+    e.preventDefault();
+    if (step === 1 && !loading) void handleStep1Next();
+    if (step === 2 && !loading) handleStep2Next();
+    if (step === 3 && !loading) void handleLaunchTeam();
   }
 
   if (!onboardingOpen) return null;
 
+  const selectedCount = selectedRoles.size;
+
   return (
-    <Dialog
-      open={onboardingOpen}
-      onOpenChange={(open) => {
-        if (!open) handleClose();
-      }}
-    >
+    <Dialog open={onboardingOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <DialogPortal>
-        {/* Plain div instead of DialogOverlay — Radix's overlay wraps in
-            RemoveScroll which blocks wheel events on our custom (non-DialogContent)
-            scroll container. A plain div preserves the background without scroll-locking. */}
         <div className="fixed inset-0 z-50 bg-background" />
         <div className="fixed inset-0 z-50 flex" onKeyDown={handleKeyDown}>
-          {/* Close button */}
+          {/* Close */}
           <button
             onClick={handleClose}
             className="absolute top-4 left-4 z-10 rounded-sm p-1.5 text-muted-foreground/60 hover:text-foreground transition-colors"
@@ -473,519 +495,325 @@ export function OnboardingWizard() {
             <span className="sr-only">Close</span>
           </button>
 
-          {/* Left half — form */}
+          {/* Left: Form */}
           <div className="w-full md:w-1/2 flex flex-col overflow-y-auto">
-            <div className="w-full max-w-md mx-auto my-auto px-8 py-12 shrink-0">
-              {/* Progress indicators */}
-              <div className="flex items-center gap-2 mb-8">
+            <div className="w-full max-w-3xl mx-auto px-4 sm:px-6 py-10 md:py-12">
+
+              {/* Header */}
+              <div className="flex items-center gap-2 mb-6">
                 <Sparkles className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Get Started</span>
-                <span className="text-sm text-muted-foreground/60">
-                  Step {step} of 4
-                </span>
-                <div className="flex items-center gap-1.5 ml-auto">
-                  {[1, 2, 3, 4].map((s) => (
-                    <div
-                      key={s}
-                      className={cn(
-                        "h-1.5 w-6 rounded-full transition-colors",
-                        s < step
-                          ? "bg-green-500"
-                          : s === step
-                            ? "bg-foreground"
-                            : "bg-muted"
-                      )}
-                    />
-                  ))}
-                </div>
+                <span className="text-sm font-medium">Build your AI team</span>
+                <span className="text-sm text-muted-foreground/70">Step {step} of 3</span>
               </div>
 
-              {/* Step content */}
+              {/* ── Step 1: Company basics ── */}
               {step === 1 && (
-                <div className="space-y-5">
+                <div className="space-y-5 pb-28">
                   <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
+                    <div className="bg-muted/50 p-2 rounded-md">
                       <Building2 className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
-                      <h3 className="font-medium">Name your company</h3>
-                      <p className="text-xs text-muted-foreground">
-                        This is the organization your agents will work for.
-                      </p>
+                      <h3 className="font-medium">Let&apos;s set up your AI team</h3>
+                      <p className="text-xs text-muted-foreground">A few details to generate the right starting team.</p>
                     </div>
                   </div>
+
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">
-                      Company name
-                    </label>
+                    <label className="text-xs text-muted-foreground mb-1 block">Company name</label>
                     <input
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                      className="w-full min-h-[44px] rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
                       placeholder="Acme Corp"
                       value={companyName}
                       onChange={(e) => setCompanyName(e.target.value)}
                       autoFocus
                     />
                   </div>
+
                   <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">
-                      Mission / goal (optional)
-                    </label>
+                    <label className="text-xs text-muted-foreground mb-1 block">What does your company do?</label>
                     <textarea
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-[60px]"
-                      placeholder="What is this company trying to achieve?"
-                      value={companyGoal}
-                      onChange={(e) => setCompanyGoal(e.target.value)}
+                      className="w-full min-h-[88px] rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-y"
+                      placeholder="We sell handmade candles online and need help with marketing and customer support."
+                      value={companyDescription}
+                      onChange={(e) => setCompanyDescription(e.target.value)}
                     />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Industry</label>
+                    <select
+                      className="w-full min-h-[44px] rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                      value={companyIndustry}
+                      onChange={(e) => handleIndustryChange(e.target.value as Industry)}
+                    >
+                      {INDUSTRIES.map((ind) => (
+                        <option key={ind} value={ind}>{ind}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               )}
 
+              {/* ── Step 2: Team selection ── */}
               {step === 2 && (
-                <div className="space-y-5">
+                <div className="space-y-5 pb-28">
                   <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
+                    <div className="bg-muted/50 p-2 rounded-md">
                       <Bot className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
-                      <h3 className="font-medium">Create your first agent</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Choose how this agent will run tasks.
-                      </p>
+                      <h3 className="font-medium">Here&apos;s your team</h3>
+                      <p className="text-xs text-muted-foreground">We picked roles based on your industry. Tap to add or remove.</p>
                     </div>
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">
-                      Agent name
-                    </label>
-                    <input
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                      placeholder="CEO"
-                      value={agentName}
-                      onChange={(e) => setAgentName(e.target.value)}
-                      autoFocus
-                    />
+
+                  <div className="flex items-center justify-between rounded-md border border-border bg-muted/20 px-3 py-2">
+                    <span className="text-sm font-medium">Suggested for {companyIndustry}</span>
+                    <span className="text-xs text-muted-foreground">{selectedCount} of {maxAgents} agents</span>
                   </div>
 
-                  {/* Adapter type radio cards */}
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-2 block">
-                      Adapter type
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[
-                        {
-                          value: "claude_local" as const,
-                          label: "Claude Code",
-                          icon: Sparkles,
-                          desc: "Local Claude agent",
-                          recommended: true
-                        },
-                        {
-                          value: "codex_local" as const,
-                          label: "Codex",
-                          icon: Code,
-                          desc: "Local Codex agent",
-                          recommended: true
-                        },
-                        {
-                          value: "opencode_local" as const,
-                          label: "OpenCode",
-                          icon: Code,
-                          desc: "Local OpenCode agent"
-                        },
-                        {
-                          value: "openclaw" as const,
-                          label: "OpenClaw",
-                          icon: Bot,
-                          desc: "Notify OpenClaw webhook",
-                          comingSoon: true
-                        },
-                        {
-                          value: "cursor" as const,
-                          label: "Cursor",
-                          icon: MousePointer2,
-                          desc: "Local Cursor agent"
-                        },
-                        {
-                          value: "process" as const,
-                          label: "Shell Command",
-                          icon: Terminal,
-                          desc: "Run a process",
-                          comingSoon: true
-                        },
-                        {
-                          value: "http" as const,
-                          label: "HTTP Webhook",
-                          icon: Globe,
-                          desc: "Call an endpoint",
-                          comingSoon: true
-                        }
-                      ].map((opt) => (
+                  {/* Suggested roles */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {suggestedRoles.map((role) => {
+                      const selected = selectedRoles.has(role.id);
+                      const Icon = role.icon;
+                      const atLimit = !selected && selectedRoles.size >= maxAgents;
+                      return (
                         <button
-                          key={opt.value}
-                          disabled={!!opt.comingSoon}
+                          key={role.id}
+                          type="button"
+                          onClick={() => toggleRole(role.id)}
+                          disabled={atLimit}
                           className={cn(
-                            "flex flex-col items-center gap-1.5 rounded-md border p-3 text-xs transition-colors relative",
-                            opt.comingSoon
-                              ? "border-border opacity-40 cursor-not-allowed"
-                              : adapterType === opt.value
-                                ? "border-foreground bg-accent"
-                                : "border-border hover:bg-accent/50"
+                            "relative min-h-[44px] rounded-md border p-3 text-left transition-colors",
+                            selected
+                              ? "border-foreground bg-accent"
+                              : atLimit
+                                ? "border-border/50 opacity-40 cursor-not-allowed"
+                                : "border-border hover:bg-accent/50",
                           )}
-                          onClick={() => {
-                            if (opt.comingSoon) return;
-                            const nextType = opt.value as AdapterType;
-                            setAdapterType(nextType);
-                            if (nextType === "codex_local" && !model) {
-                              setModel(DEFAULT_CODEX_LOCAL_MODEL);
-                            } else if (nextType === "cursor" && !model) {
-                              setModel(DEFAULT_CURSOR_LOCAL_MODEL);
-                            } else if (nextType === "opencode_local" && !model) {
-                              setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
-                            }
-                          }}
                         >
-                          {opt.recommended && (
-                            <span className="absolute -top-1.5 -right-1.5 bg-green-500 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
-                              Recommended
-                            </span>
-                          )}
-                          <opt.icon className="h-4 w-4" />
-                          <span className="font-medium">{opt.label}</span>
-                          <span className="text-muted-foreground text-[10px]">
-                            {opt.comingSoon ? "Coming soon" : opt.desc}
-                          </span>
+                          {selected && <Check className="absolute right-2 top-2 h-4 w-4 text-green-500" />}
+                          <div className="flex items-start gap-2 pr-5">
+                            <Icon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+                            <div>
+                              <p className="text-sm font-medium">
+                                {role.name}{role.id === "ceo" ? " (required)" : ""}
+                              </p>
+                              <p className="text-xs text-muted-foreground line-clamp-2">{role.description}</p>
+                            </div>
+                          </div>
                         </button>
-                      ))}
-                    </div>
+                      );
+                    })}
                   </div>
 
-                  {/* Conditional adapter fields */}
-                  {(adapterType === "claude_local" ||
-                    adapterType === "codex_local" ||
-                    adapterType === "opencode_local" ||
-                    adapterType === "cursor") && (
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <label className="text-xs text-muted-foreground">
-                            Working directory
-                          </label>
-                          <HintIcon text="Paperclip works best if you create a new folder for your agents to keep their memories and stay organized. Create a new folder and put the path here." />
-                        </div>
-                        <div className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
-                          <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <input
-                            className="w-full bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/50"
-                            placeholder="/path/to/project"
-                            value={cwd}
-                            onChange={(e) => setCwd(e.target.value)}
-                          />
-                          <ChoosePathButton />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">
-                          Model
-                        </label>
-                        <Popover open={modelOpen} onOpenChange={setModelOpen}>
-                          <PopoverTrigger asChild>
-                            <button className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-accent/50 transition-colors w-full justify-between">
-                              <span
-                                className={cn(
-                                  !model && "text-muted-foreground"
-                                )}
-                              >
-                                {selectedModel
-                                  ? selectedModel.label
-                                  : model || "Default"}
-                              </span>
-                              <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                            </button>
-                          </PopoverTrigger>
-                          <PopoverContent
-                            className="w-[var(--radix-popover-trigger-width)] p-1"
-                            align="start"
-                          >
-                            <button
-                              className={cn(
-                                "flex items-center gap-2 w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-                                !model && "bg-accent"
-                              )}
-                              onClick={() => {
-                                setModel("");
-                                setModelOpen(false);
-                              }}
-                            >
-                              Default
-                            </button>
-                            {(adapterModels ?? []).map((m) => (
-                              <button
-                                key={m.id}
-                                className={cn(
-                                  "flex items-center justify-between w-full px-2 py-1.5 text-sm rounded hover:bg-accent/50",
-                                  m.id === model && "bg-accent"
-                                )}
-                                onClick={() => {
-                                  setModel(m.id);
-                                  setModelOpen(false);
-                                }}
-                              >
-                                <span>{m.label}</span>
-                                <span className="text-xs text-muted-foreground font-mono">
-                                  {m.id}
-                                </span>
-                              </button>
-                            ))}
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-                    </div>
-                  )}
-
-                  {isLocalAdapter && (
-                    <div className="space-y-2 rounded-md border border-border p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-medium">
-                            Adapter environment check
-                          </p>
-                          <p className="text-[11px] text-muted-foreground">
-                            Runs a live probe that asks the adapter CLI to
-                            respond with hello.
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2.5 text-xs"
-                          disabled={adapterEnvLoading}
-                          onClick={() => void runAdapterEnvironmentTest()}
-                        >
-                          {adapterEnvLoading ? "Testing..." : "Test now"}
-                        </Button>
-                      </div>
-
-                      {adapterEnvError && (
-                        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-[11px] text-destructive">
-                          {adapterEnvError}
-                        </div>
-                      )}
-
-                      {adapterEnvResult && (
-                        <AdapterEnvironmentResult result={adapterEnvResult} />
-                      )}
-
-                      {shouldSuggestUnsetAnthropicApiKey && (
-                        <div className="rounded-md border border-amber-300/60 bg-amber-50/40 px-2.5 py-2 space-y-2">
-                          <p className="text-[11px] text-amber-900/90 leading-relaxed">
-                            Claude failed while <span className="font-mono">ANTHROPIC_API_KEY</span> is set.
-                            You can clear it in this CEO adapter config and retry the probe.
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 px-2.5 text-xs"
-                            disabled={adapterEnvLoading || unsetAnthropicLoading}
-                            onClick={() => void handleUnsetAnthropicApiKey()}
-                          >
-                            {unsetAnthropicLoading ? "Retrying..." : "Unset ANTHROPIC_API_KEY"}
-                          </Button>
-                        </div>
-                      )}
-
-                      <div className="rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px] space-y-1.5">
-                        <p className="font-medium">Manual debug</p>
-                        <p className="text-muted-foreground font-mono break-all">
-                          {adapterType === "cursor"
-                            ? `${effectiveAdapterCommand} -p --mode ask --output-format json \"Respond with hello.\"`
-                            : adapterType === "codex_local"
-                            ? `${effectiveAdapterCommand} exec --json -`
-                            : adapterType === "opencode_local"
-                              ? `${effectiveAdapterCommand} run --format json \"Respond with hello.\"`
-                            : `${effectiveAdapterCommand} --print - --output-format stream-json --verbose`}
-                        </p>
-                        <p className="text-muted-foreground">
-                          Prompt:{" "}
-                          <span className="font-mono">Respond with hello.</span>
-                        </p>
-                        {adapterType === "cursor" || adapterType === "codex_local" || adapterType === "opencode_local" ? (
-                          <p className="text-muted-foreground">
-                            If auth fails, set{" "}
-                            <span className="font-mono">
-                              {adapterType === "cursor" ? "CURSOR_API_KEY" : "OPENAI_API_KEY"}
-                            </span>{" "}
-                            in
-                            env or run{" "}
-                            <span className="font-mono">
-                              {adapterType === "cursor"
-                                ? "agent login"
-                                : adapterType === "codex_local"
-                                  ? "codex login"
-                                  : "opencode auth login"}
-                            </span>.
-                          </p>
-                        ) : (
-                          <p className="text-muted-foreground">
-                            If login is required, run{" "}
-                            <span className="font-mono">claude login</span> and
-                            retry.
-                          </p>
+                  {/* Add more roles collapsible */}
+                  <div className="rounded-md border border-border">
+                    <button
+                      type="button"
+                      onClick={() => setAddMoreRolesOpen((p) => !p)}
+                      className="w-full min-h-[44px] px-3 py-2 flex items-center justify-between text-left hover:bg-accent/40 transition-colors"
+                    >
+                      <span className="text-sm font-medium">Add more roles</span>
+                      {addMoreRolesOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </button>
+                    {addMoreRolesOpen && (
+                      <div className="border-t border-border p-3 space-y-4">
+                        {additionalRolesByCategory.map(({ category, roles }) =>
+                          roles.length === 0 ? null : (
+                            <div key={category}>
+                              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium mb-1.5">
+                                {CATEGORY_LABELS[category]}
+                              </p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                {roles.map((role) => {
+                                  const selected = selectedRoles.has(role.id);
+                                  const Icon = role.icon;
+                                  const atLimit = !selected && selectedRoles.size >= maxAgents;
+                                  return (
+                                    <button
+                                      key={role.id}
+                                      type="button"
+                                      onClick={() => toggleRole(role.id)}
+                                      disabled={atLimit}
+                                      className={cn(
+                                        "relative min-h-[44px] rounded-md border p-3 text-left transition-colors",
+                                        selected
+                                          ? "border-foreground bg-accent"
+                                          : atLimit
+                                            ? "border-border/50 opacity-40 cursor-not-allowed"
+                                            : "border-border hover:bg-accent/50",
+                                      )}
+                                    >
+                                      {selected && <Check className="absolute right-2 top-2 h-4 w-4 text-green-500" />}
+                                      <div className="flex items-start gap-2 pr-5">
+                                        <Icon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+                                        <div>
+                                          <p className="text-sm font-medium">{role.name}</p>
+                                          <p className="text-xs text-muted-foreground line-clamp-2">{role.description}</p>
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )
                         )}
                       </div>
-                    </div>
-                  )}
-
-                  {adapterType === "process" && (
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">
-                          Command
-                        </label>
-                        <input
-                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                          placeholder="e.g. node, python"
-                          value={command}
-                          onChange={(e) => setCommand(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">
-                          Args (comma-separated)
-                        </label>
-                        <input
-                          className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                          placeholder="e.g. script.js, --flag"
-                          value={args}
-                          onChange={(e) => setArgs(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {(adapterType === "http" || adapterType === "openclaw") && (
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">
-                        Webhook URL
-                      </label>
-                      <input
-                        className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                        placeholder="https://..."
-                        value={url}
-                        onChange={(e) => setUrl(e.target.value)}
-                      />
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               )}
 
+              {/* ── Step 3: Telegram bot token ── */}
               {step === 3 && (
-                <div className="space-y-5">
+                <div className="space-y-6 pb-28">
                   <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <ListTodo className="h-5 w-5 text-muted-foreground" />
+                    <div className="bg-muted/50 p-2 rounded-md">
+                      <Send className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div>
-                      <h3 className="font-medium">Give it something to do</h3>
+                      <h3 className="font-medium">Connect your CEO to Telegram</h3>
                       <p className="text-xs text-muted-foreground">
-                        Give your agent a small task to start with — a bug fix,
-                        a research question, writing a script.
+                        Create a bot via BotFather and paste the token. You can skip and do this later.
                       </p>
                     </div>
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">
-                      Task title
-                    </label>
-                    <input
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                      placeholder="e.g. Research competitor pricing"
-                      value={taskTitle}
-                      onChange={(e) => setTaskTitle(e.target.value)}
-                      autoFocus
-                    />
+
+                  <a
+                    href="https://t.me/BotFather"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open BotFather on Telegram
+                  </a>
+
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground/70 font-medium uppercase tracking-wider">Quick setup</p>
+                    <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                      <li>Open BotFather, send <code className="bg-muted px-1 rounded">/newbot</code></li>
+                      <li>Follow the prompts, copy the token it gives you</li>
+                      <li>Paste it below</li>
+                    </ol>
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">
-                      Description (optional)
-                    </label>
-                    <textarea
-                      ref={textareaRef}
-                      className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 resize-none min-h-[120px] max-h-[300px] overflow-y-auto"
-                      placeholder="Add more detail about what the agent should do..."
-                      value={taskDescription}
-                      onChange={(e) => setTaskDescription(e.target.value)}
-                    />
-                  </div>
+
+                  {/* CEO token */}
+                  {(() => {
+                    const validation = tokenValidation["ceo"];
+                    const token = botTokens["ceo"] ?? "";
+                    return (
+                      <div className="rounded-md border border-border p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Crown className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-sm font-medium">CEO</span>
+                          <span className="text-xs text-muted-foreground">(your personal assistant)</span>
+                        </div>
+                        <div className="relative">
+                          <input
+                            className="w-full min-h-[44px] rounded-md border border-border bg-transparent px-3 py-2 pr-8 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 font-mono text-xs"
+                            placeholder="1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            value={token}
+                            onChange={(e) => handleTokenChange("ceo", e.target.value)}
+                          />
+                          {validation?.loading && <Loader2 className="absolute right-2 top-3 h-4 w-4 animate-spin text-muted-foreground" />}
+                          {!validation?.loading && validation?.valid && <CheckCircle2 className="absolute right-2 top-3 h-4 w-4 text-green-500" />}
+                          {!validation?.loading && validation && !validation.valid && token && (
+                            <AlertCircle className="absolute right-2 top-3 h-4 w-4 text-destructive" />
+                          )}
+                        </div>
+                        {validation?.valid && validation.botUsername && (
+                          <p className="text-xs text-green-600">✓ Connected as @{validation.botUsername}</p>
+                        )}
+                        {validation && !validation.valid && validation.error && token && (
+                          <p className="text-xs text-destructive">{validation.error}</p>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Optional team bots */}
+                  {selectedCount > 1 && (
+                    <div className="rounded-md border border-border">
+                      <button
+                        type="button"
+                        onClick={() => setTeamBotsOpen((p) => !p)}
+                        className="w-full min-h-[44px] px-3 py-2 flex items-center justify-between text-left hover:bg-accent/40 transition-colors"
+                      >
+                        <span className="text-sm font-medium">Add Telegram bots for team agents</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">optional</span>
+                          {teamBotsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </span>
+                      </button>
+                      {teamBotsOpen && (
+                        <div className="border-t border-border p-3 space-y-3">
+                          <p className="text-xs text-muted-foreground">
+                            Each team agent can have its own bot to respond in Telegram groups. Create one per agent via BotFather.
+                          </p>
+                          {AGENT_ROLES.filter((r) => r.id !== "ceo" && selectedRoles.has(r.id)).map((role) => {
+                            const Icon = role.icon;
+                            const validation = tokenValidation[role.id];
+                            const token = botTokens[role.id] ?? "";
+                            return (
+                              <div key={role.id} className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Icon className="h-4 w-4 text-muted-foreground" />
+                                  <span className="text-sm font-medium">{role.name}</span>
+                                </div>
+                                <div className="relative">
+                                  <input
+                                    className="w-full min-h-[44px] rounded-md border border-border bg-transparent px-3 py-2 pr-8 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50 font-mono text-xs"
+                                    placeholder="1234567890:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                    value={token}
+                                    onChange={(e) => handleTokenChange(role.id, e.target.value)}
+                                  />
+                                  {validation?.loading && <Loader2 className="absolute right-2 top-3 h-4 w-4 animate-spin text-muted-foreground" />}
+                                  {!validation?.loading && validation?.valid && <CheckCircle2 className="absolute right-2 top-3 h-4 w-4 text-green-500" />}
+                                  {!validation?.loading && validation && !validation.valid && token && (
+                                    <AlertCircle className="absolute right-2 top-3 h-4 w-4 text-destructive" />
+                                  )}
+                                </div>
+                                {validation?.valid && validation.botUsername && (
+                                  <p className="text-xs text-green-600">✓ @{validation.botUsername}</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {deploymentStatus === "deploying" && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Setting up your AI team — this takes about 30 seconds…
+                    </div>
+                  )}
                 </div>
               )}
 
-              {step === 4 && (
-                <div className="space-y-5">
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="bg-muted/50 p-2">
-                      <Rocket className="h-5 w-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium">Ready to launch</h3>
-                      <p className="text-xs text-muted-foreground">
-                        Everything is set up. Your assigned task already woke
-                        the agent, so you can jump straight to the issue.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="border border-border divide-y divide-border">
-                    <div className="flex items-center gap-3 px-3 py-2.5">
-                      <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {companyName}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Company</p>
-                      </div>
-                      <Check className="h-4 w-4 text-green-500 shrink-0" />
-                    </div>
-                    <div className="flex items-center gap-3 px-3 py-2.5">
-                      <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {agentName}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {getUIAdapter(adapterType).label}
-                        </p>
-                      </div>
-                      <Check className="h-4 w-4 text-green-500 shrink-0" />
-                    </div>
-                    <div className="flex items-center gap-3 px-3 py-2.5">
-                      <ListTodo className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {taskTitle}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Task</p>
-                      </div>
-                      <Check className="h-4 w-4 text-green-500 shrink-0" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Error */}
               {error && (
                 <div className="mt-3">
                   <p className="text-xs text-destructive">{error}</p>
                 </div>
               )}
+            </div>
 
-              {/* Footer navigation */}
-              <div className="flex items-center justify-between mt-8">
+            {/* Sticky bottom nav */}
+            <div className="sticky bottom-0 border-t border-border bg-background/95 backdrop-blur px-4 sm:px-6 py-3">
+              <div className="w-full max-w-3xl mx-auto flex items-center justify-between gap-2">
                 <div>
-                  {step > 1 && step > (onboardingOptions.initialStep ?? 1) && (
+                  {step > 1 && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setStep((step - 1) as Step)}
+                      onClick={() => setStep((s) => (s - 1) as Step)}
                       disabled={loading}
                     >
                       <ArrowLeft className="h-3.5 w-3.5 mr-1" />
@@ -993,126 +821,75 @@ export function OnboardingWizard() {
                     </Button>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  {/* Step dots */}
+                  <div className="flex gap-1.5">
+                    {[1, 2, 3].map((s) => (
+                      <div
+                        key={s}
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full transition-colors",
+                          s === step ? "bg-foreground" : s < step ? "bg-foreground/40" : "bg-border",
+                        )}
+                      />
+                    ))}
+                  </div>
+
                   {step === 1 && (
                     <Button
                       size="sm"
-                      disabled={!companyName.trim() || loading}
-                      onClick={handleStep1Next}
+                      onClick={() => void handleStep1Next()}
+                      disabled={loading || !companyName.trim() || !companyDescription.trim()}
                     >
-                      {loading ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      {loading ? "Creating..." : "Next"}
+                      {loading
+                        ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Creating…</>
+                        : <><ArrowRight className="h-3.5 w-3.5 mr-1" />Next</>
+                      }
                     </Button>
                   )}
                   {step === 2 && (
                     <Button
                       size="sm"
-                      disabled={
-                        !agentName.trim() || loading || adapterEnvLoading
-                      }
                       onClick={handleStep2Next}
+                      disabled={!createdCompanyId || selectedRoles.size === 0}
                     >
-                      {loading ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      {loading ? "Creating..." : "Next"}
+                      <ArrowRight className="h-3.5 w-3.5 mr-1" />
+                      Next
                     </Button>
                   )}
                   {step === 3 && (
-                    <Button
-                      size="sm"
-                      disabled={!taskTitle.trim() || loading}
-                      onClick={handleStep3Next}
-                    >
-                      {loading ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      {loading ? "Creating..." : "Next"}
-                    </Button>
-                  )}
-                  {step === 4 && (
-                    <Button size="sm" disabled={loading} onClick={handleLaunch}>
-                      {loading ? (
-                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <ArrowRight className="h-3.5 w-3.5 mr-1" />
-                      )}
-                      {loading ? "Opening..." : "Open Issue"}
-                    </Button>
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleLaunchTeam()}
+                        disabled={loading}
+                      >
+                        Skip for now
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleLaunchTeam()}
+                        disabled={loading || !createdCompanyId}
+                      >
+                        {loading
+                          ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Launching…</>
+                          : <><ArrowRight className="h-3.5 w-3.5 mr-1" />Launch team</>
+                        }
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Right half — ASCII art (hidden on mobile) */}
+          {/* Right: Animation */}
           <div className="hidden md:block w-1/2 overflow-hidden">
             <AsciiArtAnimation />
           </div>
         </div>
       </DialogPortal>
     </Dialog>
-  );
-}
-
-function AdapterEnvironmentResult({
-  result
-}: {
-  result: AdapterEnvironmentTestResult;
-}) {
-  const statusLabel =
-    result.status === "pass"
-      ? "Passed"
-      : result.status === "warn"
-        ? "Warnings"
-        : "Failed";
-  const statusClass =
-    result.status === "pass"
-      ? "text-green-700 dark:text-green-300 border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10"
-      : result.status === "warn"
-        ? "text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10"
-        : "text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10";
-
-  return (
-    <div className={`rounded-md border px-2.5 py-2 text-[11px] ${statusClass}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">{statusLabel}</span>
-        <span className="opacity-80">
-          {new Date(result.testedAt).toLocaleTimeString()}
-        </span>
-      </div>
-      <div className="mt-1.5 space-y-1">
-        {result.checks.map((check, idx) => (
-          <div
-            key={`${check.code}-${idx}`}
-            className="leading-relaxed break-words"
-          >
-            <span className="font-medium uppercase tracking-wide opacity-80">
-              {check.level}
-            </span>
-            <span className="mx-1 opacity-60">·</span>
-            <span>{check.message}</span>
-            {check.detail && (
-              <span className="block opacity-75 break-all">
-                ({check.detail})
-              </span>
-            )}
-            {check.hint && (
-              <span className="block opacity-90 break-words">
-                Hint: {check.hint}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }

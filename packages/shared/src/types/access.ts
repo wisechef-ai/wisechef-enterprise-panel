@@ -17,8 +17,8 @@ export interface CompanyMembership {
   principalId: string;
   status: MembershipStatus;
   membershipRole: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PrincipalPermissionGrant {
@@ -29,8 +29,8 @@ export interface PrincipalPermissionGrant {
   permissionKey: PermissionKey;
   scope: Record<string, unknown> | null;
   grantedByUserId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Invite {
@@ -40,12 +40,12 @@ export interface Invite {
   tokenHash: string;
   allowedJoinTypes: InviteJoinType;
   defaultsPayload: Record<string, unknown> | null;
-  expiresAt: Date;
+  expiresAt: string;
   invitedByUserId: string | null;
-  revokedAt: Date | null;
-  acceptedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  revokedAt: string | null;
+  acceptedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface JoinRequest {
@@ -61,21 +61,21 @@ export interface JoinRequest {
   adapterType: AgentAdapterType | null;
   capabilities: string | null;
   agentDefaultsPayload: Record<string, unknown> | null;
-  claimSecretExpiresAt: Date | null;
-  claimSecretConsumedAt: Date | null;
+  claimSecretExpiresAt: string | null;
+  claimSecretConsumedAt: string | null;
   createdAgentId: string | null;
   approvedByUserId: string | null;
-  approvedAt: Date | null;
+  approvedAt: string | null;
   rejectedByUserId: string | null;
-  rejectedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  rejectedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface InstanceUserRoleGrant {
   id: string;
   userId: string;
   role: InstanceUserRole;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }

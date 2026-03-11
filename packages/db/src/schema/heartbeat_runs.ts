@@ -1,39 +1,40 @@
-import { pgTable, uuid, text, timestamp, jsonb, index, integer, bigint, boolean } from "drizzle-orm/pg-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 import { agentWakeupRequests } from "./agent_wakeup_requests.js";
 
-export const heartbeatRuns = pgTable(
+export const heartbeatRuns = sqliteTable(
   "heartbeat_runs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    agentId: uuid("agent_id").notNull().references(() => agents.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    agentId: text("agent_id").notNull().references(() => agents.id),
     invocationSource: text("invocation_source").notNull().default("on_demand"),
     triggerDetail: text("trigger_detail"),
     status: text("status").notNull().default("queued"),
-    startedAt: timestamp("started_at", { withTimezone: true }),
-    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
     error: text("error"),
-    wakeupRequestId: uuid("wakeup_request_id").references(() => agentWakeupRequests.id),
+    wakeupRequestId: text("wakeup_request_id").references(() => agentWakeupRequests.id),
     exitCode: integer("exit_code"),
     signal: text("signal"),
-    usageJson: jsonb("usage_json").$type<Record<string, unknown>>(),
-    resultJson: jsonb("result_json").$type<Record<string, unknown>>(),
+    usageJson: text("usage_json", { mode: "json" }).$type<Record<string, unknown>>(),
+    resultJson: text("result_json", { mode: "json" }).$type<Record<string, unknown>>(),
     sessionIdBefore: text("session_id_before"),
     sessionIdAfter: text("session_id_after"),
     logStore: text("log_store"),
     logRef: text("log_ref"),
-    logBytes: bigint("log_bytes", { mode: "number" }),
+    logBytes: integer("log_bytes"),
     logSha256: text("log_sha256"),
-    logCompressed: boolean("log_compressed").notNull().default(false),
+    logCompressed: integer("log_compressed", { mode: "boolean" }).notNull().default(false),
     stdoutExcerpt: text("stdout_excerpt"),
     stderrExcerpt: text("stderr_excerpt"),
     errorCode: text("error_code"),
     externalRunId: text("external_run_id"),
-    contextSnapshot: jsonb("context_snapshot").$type<Record<string, unknown>>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    contextSnapshot: text("context_snapshot", { mode: "json" }).$type<Record<string, unknown>>(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyAgentStartedIdx: index("heartbeat_runs_company_agent_started_idx").on(

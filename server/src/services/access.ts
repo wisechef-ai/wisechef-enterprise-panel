@@ -96,8 +96,8 @@ export function accessService(db: Db) {
       .then((rows) => rows[0] ?? null);
     if (!member) return null;
 
-    await db.transaction(async (tx) => {
-      await tx
+    await db.transaction((tx) => {
+      tx
         .delete(principalPermissionGrants)
         .where(
           and(
@@ -105,9 +105,10 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalType, member.principalType),
             eq(principalPermissionGrants.principalId, member.principalId),
           ),
-        );
+        )
+        .run();
       if (grants.length > 0) {
-        await tx.insert(principalPermissionGrants).values(
+        tx.insert(principalPermissionGrants).values(
           grants.map((grant) => ({
             companyId,
             principalType: member.principalType,
@@ -115,10 +116,10 @@ export function accessService(db: Db) {
             permissionKey: grant.permissionKey,
             scope: grant.scope ?? null,
             grantedByUserId,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
           })),
-        );
+        ).run();
       }
     });
 
@@ -163,21 +164,21 @@ export function accessService(db: Db) {
     const existingByCompany = new Map(existing.map((row) => [row.companyId, row]));
     const target = new Set(companyIds);
 
-    await db.transaction(async (tx) => {
+    await db.transaction((tx) => {
       const toDelete = existing.filter((row) => !target.has(row.companyId)).map((row) => row.id);
       if (toDelete.length > 0) {
-        await tx.delete(companyMemberships).where(inArray(companyMemberships.id, toDelete));
+        tx.delete(companyMemberships).where(inArray(companyMemberships.id, toDelete)).run();
       }
 
       for (const companyId of target) {
         if (existingByCompany.has(companyId)) continue;
-        await tx.insert(companyMemberships).values({
+        tx.insert(companyMemberships).values({
           companyId,
           principalType: "user",
           principalId: userId,
           status: "active",
           membershipRole: "member",
-        });
+        }).run();
       }
     });
 
@@ -196,7 +197,7 @@ export function accessService(db: Db) {
       if (existing.status !== status || existing.membershipRole !== membershipRole) {
         const updated = await db
           .update(companyMemberships)
-          .set({ status, membershipRole, updatedAt: new Date() })
+          .set({ status, membershipRole, updatedAt: new Date().toISOString() })
           .where(eq(companyMemberships.id, existing.id))
           .returning()
           .then((rows) => rows[0] ?? null);
@@ -225,8 +226,8 @@ export function accessService(db: Db) {
     grants: GrantInput[],
     grantedByUserId: string | null,
   ) {
-    await db.transaction(async (tx) => {
-      await tx
+    await db.transaction((tx) => {
+      tx
         .delete(principalPermissionGrants)
         .where(
           and(
@@ -234,9 +235,10 @@ export function accessService(db: Db) {
             eq(principalPermissionGrants.principalType, principalType),
             eq(principalPermissionGrants.principalId, principalId),
           ),
-        );
+        )
+        .run();
       if (grants.length === 0) return;
-      await tx.insert(principalPermissionGrants).values(
+      tx.insert(principalPermissionGrants).values(
         grants.map((grant) => ({
           companyId,
           principalType,
@@ -244,10 +246,10 @@ export function accessService(db: Db) {
           permissionKey: grant.permissionKey,
           scope: grant.scope ?? null,
           grantedByUserId,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         })),
-      );
+      ).run();
     });
   }
 

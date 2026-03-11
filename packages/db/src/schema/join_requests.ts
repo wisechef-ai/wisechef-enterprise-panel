@@ -1,14 +1,15 @@
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { invites } from "./invites.js";
 import { agents } from "./agents.js";
 
-export const joinRequests = pgTable(
+export const joinRequests = sqliteTable(
   "join_requests",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    inviteId: uuid("invite_id").notNull().references(() => invites.id),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    inviteId: text("invite_id").notNull().references(() => invites.id),
+    companyId: text("company_id").notNull().references(() => companies.id),
     requestType: text("request_type").notNull(),
     status: text("status").notNull().default("pending_approval"),
     requestIp: text("request_ip").notNull(),
@@ -17,17 +18,17 @@ export const joinRequests = pgTable(
     agentName: text("agent_name"),
     adapterType: text("adapter_type"),
     capabilities: text("capabilities"),
-    agentDefaultsPayload: jsonb("agent_defaults_payload").$type<Record<string, unknown> | null>(),
+    agentDefaultsPayload: text("agent_defaults_payload", { mode: "json" }).$type<Record<string, unknown> | null>(),
     claimSecretHash: text("claim_secret_hash"),
-    claimSecretExpiresAt: timestamp("claim_secret_expires_at", { withTimezone: true }),
-    claimSecretConsumedAt: timestamp("claim_secret_consumed_at", { withTimezone: true }),
-    createdAgentId: uuid("created_agent_id").references(() => agents.id),
+    claimSecretExpiresAt: text("claim_secret_expires_at"),
+    claimSecretConsumedAt: text("claim_secret_consumed_at"),
+    createdAgentId: text("created_agent_id").references(() => agents.id),
     approvedByUserId: text("approved_by_user_id"),
-    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedAt: text("approved_at"),
     rejectedByUserId: text("rejected_by_user_id"),
-    rejectedAt: timestamp("rejected_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    rejectedAt: text("rejected_at"),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     inviteUniqueIdx: uniqueIndex("join_requests_invite_unique_idx").on(table.inviteId),

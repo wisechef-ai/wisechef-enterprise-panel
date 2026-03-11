@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: '/enterprise/',
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -12,6 +13,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ["dev.wisechef.ai"],
     proxy: {
       "/api": {
         target: "http://localhost:3100",

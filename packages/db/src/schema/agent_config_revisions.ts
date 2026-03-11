@@ -1,21 +1,22 @@
-import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import crypto from "crypto";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
-export const agentConfigRevisions = pgTable(
+export const agentConfigRevisions = sqliteTable(
   "agent_config_revisions",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    companyId: uuid("company_id").notNull().references(() => companies.id),
-    agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
-    createdByAgentId: uuid("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    companyId: text("company_id").notNull().references(() => companies.id),
+    agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    createdByAgentId: text("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdByUserId: text("created_by_user_id"),
     source: text("source").notNull().default("patch"),
-    rolledBackFromRevisionId: uuid("rolled_back_from_revision_id"),
-    changedKeys: jsonb("changed_keys").$type<string[]>().notNull().default([]),
-    beforeConfig: jsonb("before_config").$type<Record<string, unknown>>().notNull(),
-    afterConfig: jsonb("after_config").$type<Record<string, unknown>>().notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    rolledBackFromRevisionId: text("rolled_back_from_revision_id"),
+    changedKeys: text("changed_keys", { mode: "json" }).$type<string[]>().notNull().default([]),
+    beforeConfig: text("before_config", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    afterConfig: text("after_config", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   },
   (table) => ({
     companyAgentCreatedIdx: index("agent_config_revisions_company_agent_created_idx").on(

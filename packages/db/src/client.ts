@@ -1,736 +1,695 @@
-import { createHash } from "node:crypto";
-import { drizzle as drizzlePg } from "drizzle-orm/postgres-js";
-import { migrate as migratePg } from "drizzle-orm/postgres-js/migrator";
-import { readFile, readdir } from "node:fs/promises";
-import postgres from "postgres";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import Database from "better-sqlite3";
+import { sql } from "drizzle-orm";
 import * as schema from "./schema/index.js";
+import fs from "node:fs";
+import path from "node:path";
 
-const MIGRATIONS_FOLDER = new URL("./migrations", import.meta.url).pathname;
-const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
-const MIGRATIONS_JOURNAL_JSON = new URL("./migrations/meta/_journal.json", import.meta.url).pathname;
+export function createDb(dbPath: string) {
+  // Ensure parent directory exists
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 
-function isSafeIdentifier(value: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+  const sqlite = new Database(dbPath);
+
+  // Performance + integrity pragmas
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.pragma("synchronous = NORMAL");
+  sqlite.pragma("busy_timeout = 5000");
+
+  const db = drizzle(sqlite, { schema });
+  return db;
 }
 
-function quoteIdentifier(value: string): string {
-  if (!isSafeIdentifier(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
-  return `"${value.replaceAll("\"", "\"\"")}"`;
-}
-
-function quoteLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function splitMigrationStatements(content: string): string[] {
-  return content
-    .split("--> statement-breakpoint")
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0);
-}
-
-export type MigrationState =
-  | { status: "upToDate"; tableCount: number; availableMigrations: string[]; appliedMigrations: string[] }
-  | {
-      status: "needsMigrations";
-      tableCount: number;
-      availableMigrations: string[];
-      appliedMigrations: string[];
-      pendingMigrations: string[];
-      reason: "no-migration-journal-empty-db" | "no-migration-journal-non-empty-db" | "pending-migrations";
-    };
-
-export function createDb(url: string) {
-  const sql = postgres(url);
-  return drizzlePg(sql, { schema });
-}
-
-async function listMigrationFiles(): Promise<string[]> {
-  const entries = await readdir(MIGRATIONS_FOLDER, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-}
-
-type MigrationJournalFile = {
-  entries?: Array<{ idx?: number; tag?: string; when?: number }>;
-};
-
-type JournalMigrationEntry = {
-  fileName: string;
-  folderMillis: number;
-  order: number;
-};
-
-async function listJournalMigrationEntries(): Promise<JournalMigrationEntry[]> {
-  try {
-    const raw = await readFile(MIGRATIONS_JOURNAL_JSON, "utf8");
-    const parsed = JSON.parse(raw) as MigrationJournalFile;
-    if (!Array.isArray(parsed.entries)) return [];
-    return parsed.entries
-      .map((entry, entryIndex) => {
-        if (typeof entry?.tag !== "string") return null;
-        if (typeof entry?.when !== "number" || !Number.isFinite(entry.when)) return null;
-        const order = Number.isInteger(entry.idx) ? Number(entry.idx) : entryIndex;
-        return { fileName: `${entry.tag}.sql`, folderMillis: entry.when, order };
-      })
-      .filter((entry): entry is JournalMigrationEntry => entry !== null);
-  } catch {
-    return [];
+/**
+ * Push schema to SQLite — creates all tables if they don't exist.
+ * Uses CREATE TABLE IF NOT EXISTS for idempotent bootstrap.
+ */
+export function ensureSchema(db: Db) {
+  // Use drizzle's schema to create tables
+  // We generate CREATE TABLE IF NOT EXISTS statements from the schema definitions
+  const tableStatements = generateCreateTableStatements();
+  for (const stmt of tableStatements) {
+    db.run(sql.raw(stmt));
   }
 }
 
-async function listJournalMigrationFiles(): Promise<string[]> {
-  const entries = await listJournalMigrationEntries();
-  return entries.map((entry) => entry.fileName);
-}
-
-async function readMigrationFileContent(migrationFile: string): Promise<string> {
-  return readFile(new URL(`./migrations/${migrationFile}`, import.meta.url), "utf8");
-}
-
-async function orderMigrationsByJournal(migrationFiles: string[]): Promise<string[]> {
-  const journalEntries = await listJournalMigrationEntries();
-  const orderByFileName = new Map(journalEntries.map((entry) => [entry.fileName, entry.order]));
-  return [...migrationFiles].sort((left, right) => {
-    const leftOrder = orderByFileName.get(left);
-    const rightOrder = orderByFileName.get(right);
-    if (leftOrder === undefined && rightOrder === undefined) return left.localeCompare(right);
-    if (leftOrder === undefined) return 1;
-    if (rightOrder === undefined) return -1;
-    if (leftOrder === rightOrder) return left.localeCompare(right);
-    return leftOrder - rightOrder;
-  });
-}
-
-type SqlExecutor = Pick<ReturnType<typeof postgres>, "unsafe">;
-
-async function runInTransaction(sql: SqlExecutor, action: () => Promise<void>): Promise<void> {
-  await sql.unsafe("BEGIN");
-  try {
-    await action();
-    await sql.unsafe("COMMIT");
-  } catch (error) {
-    try {
-      await sql.unsafe("ROLLBACK");
-    } catch {
-      // Ignore rollback failures and surface the original error.
-    }
-    throw error;
-  }
-}
-
-async function latestMigrationCreatedAt(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-): Promise<number | null> {
-  const rows = await sql.unsafe<{ created_at: string | number | null }[]>(
-    `SELECT created_at FROM ${qualifiedTable} ORDER BY created_at DESC NULLS LAST LIMIT 1`,
-  );
-  const value = Number(rows[0]?.created_at ?? Number.NaN);
-  return Number.isFinite(value) ? value : null;
-}
-
-function normalizeFolderMillis(value: number | null | undefined): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return Math.trunc(value);
-  }
-  return Date.now();
-}
-
-async function ensureMigrationJournalTable(
-  sql: ReturnType<typeof postgres>,
-): Promise<{ migrationTableSchema: string; columnNames: Set<string> }> {
-  let migrationTableSchema = await discoverMigrationTableSchema(sql);
-  if (!migrationTableSchema) {
-    const drizzleSchema = quoteIdentifier("drizzle");
-    const migrationTable = quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE);
-    await sql.unsafe(`CREATE SCHEMA IF NOT EXISTS ${drizzleSchema}`);
-    await sql.unsafe(
-      `CREATE TABLE IF NOT EXISTS ${drizzleSchema}.${migrationTable} (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint)`,
-    );
-    migrationTableSchema = (await discoverMigrationTableSchema(sql)) ?? "drizzle";
-  }
-
-  const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-  return { migrationTableSchema, columnNames };
-}
-
-async function migrationHistoryEntryExists(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-  columnNames: Set<string>,
-  migrationFile: string,
-  hash: string,
-): Promise<boolean> {
-  const predicates: string[] = [];
-  if (columnNames.has("hash")) predicates.push(`hash = ${quoteLiteral(hash)}`);
-  if (columnNames.has("name")) predicates.push(`name = ${quoteLiteral(migrationFile)}`);
-  if (predicates.length === 0) return false;
-
-  const rows = await sql.unsafe<{ one: number }[]>(
-    `SELECT 1 AS one FROM ${qualifiedTable} WHERE ${predicates.join(" OR ")} LIMIT 1`,
-  );
-  return rows.length > 0;
-}
-
-async function recordMigrationHistoryEntry(
-  sql: SqlExecutor,
-  qualifiedTable: string,
-  columnNames: Set<string>,
-  migrationFile: string,
-  hash: string,
-  folderMillis: number,
-): Promise<void> {
-  const insertColumns: string[] = [];
-  const insertValues: string[] = [];
-
-  if (columnNames.has("hash")) {
-    insertColumns.push(quoteIdentifier("hash"));
-    insertValues.push(quoteLiteral(hash));
-  }
-  if (columnNames.has("name")) {
-    insertColumns.push(quoteIdentifier("name"));
-    insertValues.push(quoteLiteral(migrationFile));
-  }
-  if (columnNames.has("created_at")) {
-    const latestCreatedAt = await latestMigrationCreatedAt(sql, qualifiedTable);
-    const createdAt = latestCreatedAt === null
-      ? normalizeFolderMillis(folderMillis)
-      : Math.max(latestCreatedAt + 1, normalizeFolderMillis(folderMillis));
-    insertColumns.push(quoteIdentifier("created_at"));
-    insertValues.push(quoteLiteral(String(createdAt)));
-  }
-
-  if (insertColumns.length === 0) return;
-
-  await sql.unsafe(
-    `INSERT INTO ${qualifiedTable} (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
-  );
-}
-
-async function applyPendingMigrationsManually(
-  url: string,
-  pendingMigrations: string[],
-): Promise<void> {
-  if (pendingMigrations.length === 0) return;
-
-  const orderedPendingMigrations = await orderMigrationsByJournal(pendingMigrations);
-  const journalEntries = await listJournalMigrationEntries();
-  const folderMillisByFileName = new Map(
-    journalEntries.map((entry) => [entry.fileName, normalizeFolderMillis(entry.folderMillis)]),
-  );
-
-  const sql = postgres(url, { max: 1 });
-  try {
-    const { migrationTableSchema, columnNames } = await ensureMigrationJournalTable(sql);
-    const qualifiedTable = `${quoteIdentifier(migrationTableSchema)}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-
-    for (const migrationFile of orderedPendingMigrations) {
-      const migrationContent = await readMigrationFileContent(migrationFile);
-      const hash = createHash("sha256").update(migrationContent).digest("hex");
-      const existingEntry = await migrationHistoryEntryExists(
-        sql,
-        qualifiedTable,
-        columnNames,
-        migrationFile,
-        hash,
-      );
-      if (existingEntry) continue;
-
-      await runInTransaction(sql, async () => {
-        for (const statement of splitMigrationStatements(migrationContent)) {
-          await sql.unsafe(statement);
-        }
-
-        await recordMigrationHistoryEntry(
-          sql,
-          qualifiedTable,
-          columnNames,
-          migrationFile,
-          hash,
-          folderMillisByFileName.get(migrationFile) ?? Date.now(),
-        );
-      });
-    }
-  } finally {
-    await sql.end();
-  }
-}
-
-async function mapHashesToMigrationFiles(migrationFiles: string[]): Promise<Map<string, string>> {
-  const mapped = new Map<string, string>();
-
-  await Promise.all(
-    migrationFiles.map(async (migrationFile) => {
-      const content = await readMigrationFileContent(migrationFile);
-      const hash = createHash("sha256").update(content).digest("hex");
-      mapped.set(hash, migrationFile);
-    }),
-  );
-
-  return mapped;
-}
-
-async function getMigrationTableColumnNames(
-  sql: ReturnType<typeof postgres>,
-  migrationTableSchema: string,
-): Promise<Set<string>> {
-  const columns = await sql.unsafe<{ column_name: string }[]>(
-    `
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_schema = ${quoteLiteral(migrationTableSchema)}
-        AND table_name = ${quoteLiteral(DRIZZLE_MIGRATIONS_TABLE)}
-    `,
-  );
-  return new Set(columns.map((column) => column.column_name));
-}
-
-async function tableExists(
-  sql: ReturnType<typeof postgres>,
-  tableName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name = ${tableName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function columnExists(
-  sql: ReturnType<typeof postgres>,
-  tableName: string,
-  columnName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = ${tableName}
-        AND column_name = ${columnName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function indexExists(
-  sql: ReturnType<typeof postgres>,
-  indexName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relkind = 'i'
-        AND c.relname = ${indexName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function constraintExists(
-  sql: ReturnType<typeof postgres>,
-  constraintName: string,
-): Promise<boolean> {
-  const rows = await sql<{ exists: boolean }[]>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM pg_constraint c
-      JOIN pg_namespace n ON n.oid = c.connamespace
-      WHERE n.nspname = 'public'
-        AND c.conname = ${constraintName}
-    ) AS exists
-  `;
-  return rows[0]?.exists ?? false;
-}
-
-async function migrationStatementAlreadyApplied(
-  sql: ReturnType<typeof postgres>,
-  statement: string,
-): Promise<boolean> {
-  const normalized = statement.replace(/\s+/g, " ").trim();
-
-  const createTableMatch = normalized.match(/^CREATE TABLE(?: IF NOT EXISTS)? "([^"]+)"/i);
-  if (createTableMatch) {
-    return tableExists(sql, createTableMatch[1]);
-  }
-
-  const addColumnMatch = normalized.match(
-    /^ALTER TABLE "([^"]+)" ADD COLUMN(?: IF NOT EXISTS)? "([^"]+)"/i,
-  );
-  if (addColumnMatch) {
-    return columnExists(sql, addColumnMatch[1], addColumnMatch[2]);
-  }
-
-  const createIndexMatch = normalized.match(/^CREATE (?:UNIQUE )?INDEX(?: IF NOT EXISTS)? "([^"]+)"/i);
-  if (createIndexMatch) {
-    return indexExists(sql, createIndexMatch[1]);
-  }
-
-  const addConstraintMatch = normalized.match(/^ALTER TABLE "([^"]+)" ADD CONSTRAINT "([^"]+)"/i);
-  if (addConstraintMatch) {
-    return constraintExists(sql, addConstraintMatch[2]);
-  }
-
-  // If we cannot reason about a statement safely, require manual migration.
-  return false;
-}
-
-async function migrationContentAlreadyApplied(
-  sql: ReturnType<typeof postgres>,
-  migrationContent: string,
-): Promise<boolean> {
-  const statements = splitMigrationStatements(migrationContent);
-  if (statements.length === 0) return false;
-
-  for (const statement of statements) {
-    const applied = await migrationStatementAlreadyApplied(sql, statement);
-    if (!applied) return false;
-  }
-
-  return true;
-}
-
-async function loadAppliedMigrations(
-  sql: ReturnType<typeof postgres>,
-  migrationTableSchema: string,
-  availableMigrations: string[],
-): Promise<string[]> {
-  const quotedSchema = quoteIdentifier(migrationTableSchema);
-  const qualifiedTable = `${quotedSchema}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-  const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-
-  if (columnNames.has("name")) {
-    const rows = await sql.unsafe<{ name: string }[]>(`SELECT name FROM ${qualifiedTable} ORDER BY id`);
-    return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
-  }
-
-  if (columnNames.has("hash")) {
-    const rows = await sql.unsafe<{ hash: string }[]>(`SELECT hash FROM ${qualifiedTable} ORDER BY id`);
-    const hashesToMigrationFiles = await mapHashesToMigrationFiles(availableMigrations);
-    const appliedFromHashes = rows
-      .map((row) => hashesToMigrationFiles.get(row.hash))
-      .filter((name): name is string => Boolean(name));
-
-    if (appliedFromHashes.length > 0) {
-      // Best-effort: when all hashes resolve, this is authoritative.
-      if (appliedFromHashes.length === rows.length) return appliedFromHashes;
-
-      // Partial hash resolution can happen when files have changed; return what we can trust.
-      return appliedFromHashes;
-    }
-
-    // Fallback only when hashes are unavailable/unresolved.
-    if (columnNames.has("created_at")) {
-      const journalEntries = await listJournalMigrationEntries();
-      if (journalEntries.length > 0) {
-        const lastDbRows = await sql.unsafe<{ created_at: string | number | null }[]>(
-          `SELECT created_at FROM ${qualifiedTable} ORDER BY created_at DESC LIMIT 1`,
-        );
-        const lastCreatedAt = Number(lastDbRows[0]?.created_at ?? -1);
-        if (Number.isFinite(lastCreatedAt) && lastCreatedAt >= 0) {
-          return journalEntries
-            .filter((entry) => availableMigrations.includes(entry.fileName))
-            .filter((entry) => entry.folderMillis <= lastCreatedAt)
-            .map((entry) => entry.fileName)
-            .slice(0, rows.length);
-        }
-      }
-    }
-  }
-
-  const rows = await sql.unsafe<{ id: number }[]>(`SELECT id FROM ${qualifiedTable} ORDER BY id`);
-  const journalMigrationFiles = await listJournalMigrationFiles();
-  const appliedFromIds = rows
-    .map((row) => journalMigrationFiles[row.id - 1])
-    .filter((name): name is string => Boolean(name));
-  if (appliedFromIds.length > 0) return appliedFromIds;
-
-  return availableMigrations.slice(0, Math.max(0, rows.length));
-}
-
-export type MigrationHistoryReconcileResult = {
-  repairedMigrations: string[];
-  remainingMigrations: string[];
-};
-
-export async function reconcilePendingMigrationHistory(
-  url: string,
-): Promise<MigrationHistoryReconcileResult> {
-  const state = await inspectMigrations(url);
-  if (state.status !== "needsMigrations" || state.reason !== "pending-migrations") {
-    return { repairedMigrations: [], remainingMigrations: [] };
-  }
-
-  const sql = postgres(url, { max: 1 });
-  const repairedMigrations: string[] = [];
-
-  try {
-    const journalEntries = await listJournalMigrationEntries();
-    const folderMillisByFile = new Map(journalEntries.map((entry) => [entry.fileName, entry.folderMillis]));
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-    if (!migrationTableSchema) {
-      return { repairedMigrations, remainingMigrations: state.pendingMigrations };
-    }
-
-    const columnNames = await getMigrationTableColumnNames(sql, migrationTableSchema);
-    const qualifiedTable = `${quoteIdentifier(migrationTableSchema)}.${quoteIdentifier(DRIZZLE_MIGRATIONS_TABLE)}`;
-
-    for (const migrationFile of state.pendingMigrations) {
-      const migrationContent = await readMigrationFileContent(migrationFile);
-      const alreadyApplied = await migrationContentAlreadyApplied(sql, migrationContent);
-      if (!alreadyApplied) break;
-
-      const hash = createHash("sha256").update(migrationContent).digest("hex");
-      const folderMillis = folderMillisByFile.get(migrationFile) ?? Date.now();
-      const existingByHash = columnNames.has("hash")
-        ? await sql.unsafe<{ created_at: string | number | null }[]>(
-            `SELECT created_at FROM ${qualifiedTable} WHERE hash = ${quoteLiteral(hash)} ORDER BY created_at DESC LIMIT 1`,
-          )
-        : [];
-      const existingByName = columnNames.has("name")
-        ? await sql.unsafe<{ created_at: string | number | null }[]>(
-            `SELECT created_at FROM ${qualifiedTable} WHERE name = ${quoteLiteral(migrationFile)} ORDER BY created_at DESC LIMIT 1`,
-          )
-        : [];
-      if (existingByHash.length > 0 || existingByName.length > 0) {
-        if (columnNames.has("created_at")) {
-          const existingHashCreatedAt = Number(existingByHash[0]?.created_at ?? -1);
-          if (existingByHash.length > 0 && Number.isFinite(existingHashCreatedAt) && existingHashCreatedAt < folderMillis) {
-            await sql.unsafe(
-              `UPDATE ${qualifiedTable} SET created_at = ${quoteLiteral(String(folderMillis))} WHERE hash = ${quoteLiteral(hash)} AND created_at < ${quoteLiteral(String(folderMillis))}`,
-            );
-          }
-
-          const existingNameCreatedAt = Number(existingByName[0]?.created_at ?? -1);
-          if (existingByName.length > 0 && Number.isFinite(existingNameCreatedAt) && existingNameCreatedAt < folderMillis) {
-            await sql.unsafe(
-              `UPDATE ${qualifiedTable} SET created_at = ${quoteLiteral(String(folderMillis))} WHERE name = ${quoteLiteral(migrationFile)} AND created_at < ${quoteLiteral(String(folderMillis))}`,
-            );
-          }
-        }
-
-        repairedMigrations.push(migrationFile);
-        continue;
-      }
-
-      const insertColumns: string[] = [];
-      const insertValues: string[] = [];
-
-      if (columnNames.has("hash")) {
-        insertColumns.push(quoteIdentifier("hash"));
-        insertValues.push(quoteLiteral(hash));
-      }
-      if (columnNames.has("name")) {
-        insertColumns.push(quoteIdentifier("name"));
-        insertValues.push(quoteLiteral(migrationFile));
-      }
-      if (columnNames.has("created_at")) {
-        insertColumns.push(quoteIdentifier("created_at"));
-        insertValues.push(quoteLiteral(String(folderMillis)));
-      }
-
-      if (insertColumns.length === 0) break;
-
-      await sql.unsafe(
-        `INSERT INTO ${qualifiedTable} (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
-      );
-      repairedMigrations.push(migrationFile);
-    }
-  } finally {
-    await sql.end();
-  }
-
-  const refreshed = await inspectMigrations(url);
-  return {
-    repairedMigrations,
-    remainingMigrations:
-      refreshed.status === "needsMigrations" ? refreshed.pendingMigrations : [],
-  };
-}
-
-async function discoverMigrationTableSchema(sql: ReturnType<typeof postgres>): Promise<string | null> {
-  const rows = await sql<{ schemaName: string }[]>`
-    SELECT n.nspname AS "schemaName"
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE c.relname = ${DRIZZLE_MIGRATIONS_TABLE} AND c.relkind = 'r'
-  `;
-
-  if (rows.length === 0) return null;
-
-  const drizzleSchema = rows.find(({ schemaName }) => schemaName === "drizzle");
-  if (drizzleSchema) return drizzleSchema.schemaName;
-
-  const publicSchema = rows.find(({ schemaName }) => schemaName === "public");
-  if (publicSchema) return publicSchema.schemaName;
-
-  return rows[0]?.schemaName ?? null;
-}
-
-export async function inspectMigrations(url: string): Promise<MigrationState> {
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const availableMigrations = await listMigrationFiles();
-    const tableCountResult = await sql<{ count: number }[]>`
-      select count(*)::int as count
-      from information_schema.tables
-      where table_schema = 'public'
-        and table_type = 'BASE TABLE'
-    `;
-    const tableCount = tableCountResult[0]?.count ?? 0;
-
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-    if (!migrationTableSchema) {
-      if (tableCount > 0) {
-        return {
-          status: "needsMigrations",
-          tableCount,
-          availableMigrations,
-          appliedMigrations: [],
-          pendingMigrations: availableMigrations,
-          reason: "no-migration-journal-non-empty-db",
-        };
-      }
-
-      return {
-        status: "needsMigrations",
-        tableCount,
-        availableMigrations,
-        appliedMigrations: [],
-        pendingMigrations: availableMigrations,
-        reason: "no-migration-journal-empty-db",
-      };
-    }
-
-    const appliedMigrations = await loadAppliedMigrations(sql, migrationTableSchema, availableMigrations);
-    const pendingMigrations = availableMigrations.filter((name) => !appliedMigrations.includes(name));
-    if (pendingMigrations.length === 0) {
-      return {
-        status: "upToDate",
-        tableCount,
-        availableMigrations,
-        appliedMigrations,
-      };
-    }
-
-    return {
-      status: "needsMigrations",
-      tableCount,
-      availableMigrations,
-      appliedMigrations,
-      pendingMigrations,
-      reason: "pending-migrations",
-    };
-  } finally {
-    await sql.end();
-  }
-}
-
-export async function applyPendingMigrations(url: string): Promise<void> {
-  const initialState = await inspectMigrations(url);
-  if (initialState.status === "upToDate") return;
-
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const db = drizzlePg(sql);
-    await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  } finally {
-    await sql.end();
-  }
-
-  let state = await inspectMigrations(url);
-  if (state.status === "upToDate") return;
-
-  const repair = await reconcilePendingMigrationHistory(url);
-  if (repair.repairedMigrations.length > 0) {
-    state = await inspectMigrations(url);
-    if (state.status === "upToDate") return;
-  }
-
-  if (state.status !== "needsMigrations" || state.reason !== "pending-migrations") {
-    throw new Error("Migrations are still pending after attempted apply; run inspectMigrations for details.");
-  }
-
-  await applyPendingMigrationsManually(url, state.pendingMigrations);
-
-  const finalState = await inspectMigrations(url);
-  if (finalState.status !== "upToDate") {
-    throw new Error(
-      `Failed to apply pending migrations: ${finalState.pendingMigrations.join(", ")}`,
-    );
-  }
-}
-
-export type MigrationBootstrapResult =
-  | { migrated: true; reason: "migrated-empty-db"; tableCount: 0 }
-  | { migrated: false; reason: "already-migrated"; tableCount: number }
-  | { migrated: false; reason: "not-empty-no-migration-journal"; tableCount: number };
-
-export async function migratePostgresIfEmpty(url: string): Promise<MigrationBootstrapResult> {
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    const migrationTableSchema = await discoverMigrationTableSchema(sql);
-
-    const tableCountResult = await sql<{ count: number }[]>`
-      select count(*)::int as count
-      from information_schema.tables
-      where table_schema = 'public'
-        and table_type = 'BASE TABLE'
-    `;
-
-    const tableCount = tableCountResult[0]?.count ?? 0;
-
-    if (migrationTableSchema) {
-      return { migrated: false, reason: "already-migrated", tableCount };
-    }
-
-    if (tableCount > 0) {
-      return { migrated: false, reason: "not-empty-no-migration-journal", tableCount };
-    }
-
-    const db = drizzlePg(sql);
-    const migrationsFolder = new URL("./migrations", import.meta.url).pathname;
-    await migratePg(db, { migrationsFolder });
-
-    return { migrated: true, reason: "migrated-empty-db", tableCount: 0 };
-  } finally {
-    await sql.end();
-  }
-}
-
-export async function ensurePostgresDatabase(
-  url: string,
-  databaseName: string,
-): Promise<"created" | "exists"> {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(databaseName)) {
-    throw new Error(`Unsafe database name: ${databaseName}`);
-  }
-
-  const sql = postgres(url, { max: 1 });
-  try {
-    const existing = await sql<{ one: number }[]>`
-      select 1 as one from pg_database where datname = ${databaseName} limit 1
-    `;
-    if (existing.length > 0) return "exists";
-
-    await sql.unsafe(`create database "${databaseName}"`);
-    return "created";
-  } finally {
-    await sql.end();
-  }
+function generateCreateTableStatements(): string[] {
+  // Auto-generated from drizzle schema — do not edit manually
+  return [
+    `CREATE TABLE IF NOT EXISTS "companies" (
+  "id" text PRIMARY KEY NOT NULL,
+  "name" text NOT NULL,
+  "description" text,
+  "status" text NOT NULL DEFAULT 'active',
+  "issue_prefix" text NOT NULL DEFAULT 'PAP',
+  "issue_counter" integer NOT NULL DEFAULT 0,
+  "budget_monthly_cents" integer NOT NULL DEFAULT 0,
+  "spent_monthly_cents" integer NOT NULL DEFAULT 0,
+  "require_board_approval_for_new_agents" integer NOT NULL DEFAULT 1,
+  "brand_color" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL
+)`,
+    `CREATE TABLE IF NOT EXISTS "user" (
+  "id" text PRIMARY KEY NOT NULL,
+  "name" text NOT NULL,
+  "email" text NOT NULL,
+  "email_verified" integer NOT NULL DEFAULT 0,
+  "image" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL
+)`,
+    `CREATE TABLE IF NOT EXISTS "session" (
+  "id" text PRIMARY KEY NOT NULL,
+  "expires_at" text NOT NULL,
+  "token" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  "ip_address" text,
+  "user_agent" text,
+  "user_id" text NOT NULL,
+  FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE cascade
+)`,
+    `CREATE TABLE IF NOT EXISTS "account" (
+  "id" text PRIMARY KEY NOT NULL,
+  "account_id" text NOT NULL,
+  "provider_id" text NOT NULL,
+  "user_id" text NOT NULL,
+  "access_token" text,
+  "refresh_token" text,
+  "id_token" text,
+  "access_token_expires_at" text,
+  "refresh_token_expires_at" text,
+  "scope" text,
+  "password" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE cascade
+)`,
+    `CREATE TABLE IF NOT EXISTS "verification" (
+  "id" text PRIMARY KEY NOT NULL,
+  "identifier" text NOT NULL,
+  "value" text NOT NULL,
+  "expires_at" text NOT NULL,
+  "created_at" text,
+  "updated_at" text
+)`,
+    `CREATE TABLE IF NOT EXISTS "instance_user_roles" (
+  "id" text PRIMARY KEY NOT NULL,
+  "user_id" text NOT NULL,
+  "role" text NOT NULL DEFAULT 'instance_admin',
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL
+)`,
+    `CREATE TABLE IF NOT EXISTS "agents" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "name" text NOT NULL,
+  "role" text NOT NULL DEFAULT 'general',
+  "title" text,
+  "icon" text,
+  "status" text NOT NULL DEFAULT 'idle',
+  "reports_to" text,
+  "capabilities" text,
+  "adapter_type" text NOT NULL DEFAULT 'process',
+  "adapter_config" text NOT NULL DEFAULT '{}',
+  "runtime_config" text NOT NULL DEFAULT '{}',
+  "budget_monthly_cents" integer NOT NULL DEFAULT 0,
+  "spent_monthly_cents" integer NOT NULL DEFAULT 0,
+  "permissions" text NOT NULL DEFAULT '{}',
+  "last_heartbeat_at" text,
+  "metadata" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("reports_to") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "agent_runtime_state" (
+  "agent_id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "adapter_type" text NOT NULL,
+  "session_id" text,
+  "state_json" text NOT NULL DEFAULT '{}',
+  "last_run_id" text,
+  "last_run_status" text,
+  "total_input_tokens" integer NOT NULL DEFAULT 0,
+  "total_output_tokens" integer NOT NULL DEFAULT 0,
+  "total_cached_input_tokens" integer NOT NULL DEFAULT 0,
+  "total_cost_cents" integer NOT NULL DEFAULT 0,
+  "last_error" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "activity_log" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "actor_type" text NOT NULL DEFAULT 'system',
+  "actor_id" text NOT NULL,
+  "action" text NOT NULL,
+  "entity_type" text NOT NULL,
+  "entity_id" text NOT NULL,
+  "agent_id" text,
+  "run_id" text,
+  "details" text,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("run_id") REFERENCES "heartbeat_runs"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "agent_api_keys" (
+  "id" text PRIMARY KEY NOT NULL,
+  "agent_id" text NOT NULL,
+  "company_id" text NOT NULL,
+  "name" text NOT NULL,
+  "key_hash" text NOT NULL,
+  "last_used_at" text,
+  "revoked_at" text,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "agent_config_revisions" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "created_by_agent_id" text,
+  "created_by_user_id" text,
+  "source" text NOT NULL DEFAULT 'patch',
+  "rolled_back_from_revision_id" text,
+  "changed_keys" text NOT NULL DEFAULT '[]',
+  "before_config" text NOT NULL,
+  "after_config" text NOT NULL,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id") ON DELETE cascade,
+  FOREIGN KEY ("created_by_agent_id") REFERENCES "agents"("id") ON DELETE set null
+)`,
+    `CREATE TABLE IF NOT EXISTS "agent_task_sessions" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "adapter_type" text NOT NULL,
+  "task_key" text NOT NULL,
+  "session_params_json" text,
+  "session_display_id" text,
+  "last_run_id" text,
+  "last_error" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("last_run_id") REFERENCES "heartbeat_runs"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "agent_wakeup_requests" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "source" text NOT NULL,
+  "trigger_detail" text,
+  "reason" text,
+  "payload" text,
+  "status" text NOT NULL DEFAULT 'queued',
+  "coalesced_count" integer NOT NULL DEFAULT 0,
+  "requested_by_actor_type" text,
+  "requested_by_actor_id" text,
+  "idempotency_key" text,
+  "run_id" text,
+  "requested_at" text NOT NULL,
+  "claimed_at" text,
+  "finished_at" text,
+  "error" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "approval_comments" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "approval_id" text NOT NULL,
+  "author_agent_id" text,
+  "author_user_id" text,
+  "body" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("approval_id") REFERENCES "approvals"("id"),
+  FOREIGN KEY ("author_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "approvals" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "type" text NOT NULL,
+  "requested_by_agent_id" text,
+  "requested_by_user_id" text,
+  "status" text NOT NULL DEFAULT 'pending',
+  "payload" text NOT NULL,
+  "decision_note" text,
+  "decided_by_user_id" text,
+  "decided_at" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("requested_by_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "assets" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "provider" text NOT NULL,
+  "object_key" text NOT NULL,
+  "content_type" text NOT NULL,
+  "byte_size" integer NOT NULL,
+  "sha256" text NOT NULL,
+  "original_filename" text,
+  "created_by_agent_id" text,
+  "created_by_user_id" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("created_by_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "company_memberships" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "principal_type" text NOT NULL,
+  "principal_id" text NOT NULL,
+  "status" text NOT NULL DEFAULT 'active',
+  "membership_role" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "company_secret_versions" (
+  "id" text PRIMARY KEY NOT NULL,
+  "secret_id" text NOT NULL,
+  "version" integer NOT NULL,
+  "material" text NOT NULL,
+  "value_sha256" text NOT NULL,
+  "created_by_agent_id" text,
+  "created_by_user_id" text,
+  "created_at" text NOT NULL,
+  "revoked_at" text,
+  FOREIGN KEY ("secret_id") REFERENCES "company_secrets"("id") ON DELETE cascade,
+  FOREIGN KEY ("created_by_agent_id") REFERENCES "agents"("id") ON DELETE set null
+)`,
+    `CREATE TABLE IF NOT EXISTS "company_secrets" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "name" text NOT NULL,
+  "provider" text NOT NULL DEFAULT 'local_encrypted',
+  "external_ref" text,
+  "latest_version" integer NOT NULL DEFAULT 1,
+  "description" text,
+  "created_by_agent_id" text,
+  "created_by_user_id" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("created_by_agent_id") REFERENCES "agents"("id") ON DELETE set null
+)`,
+    `CREATE TABLE IF NOT EXISTS "cost_events" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "issue_id" text,
+  "project_id" text,
+  "goal_id" text,
+  "billing_code" text,
+  "provider" text NOT NULL,
+  "model" text NOT NULL,
+  "input_tokens" integer NOT NULL DEFAULT 0,
+  "output_tokens" integer NOT NULL DEFAULT 0,
+  "cost_cents" integer NOT NULL,
+  "occurred_at" text NOT NULL,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id"),
+  FOREIGN KEY ("project_id") REFERENCES "projects"("id"),
+  FOREIGN KEY ("goal_id") REFERENCES "goals"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "goals" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "title" text NOT NULL,
+  "description" text,
+  "level" text NOT NULL DEFAULT 'task',
+  "status" text NOT NULL DEFAULT 'planned',
+  "parent_id" text,
+  "owner_agent_id" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("parent_id") REFERENCES "goals"("id"),
+  FOREIGN KEY ("owner_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "heartbeat_run_events" (
+  "id" integer PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "run_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "seq" integer NOT NULL,
+  "event_type" text NOT NULL,
+  "stream" text,
+  "level" text,
+  "color" text,
+  "message" text,
+  "payload" text,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("run_id") REFERENCES "heartbeat_runs"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "heartbeat_runs" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "agent_id" text NOT NULL,
+  "invocation_source" text NOT NULL DEFAULT 'on_demand',
+  "trigger_detail" text,
+  "status" text NOT NULL DEFAULT 'queued',
+  "started_at" text,
+  "finished_at" text,
+  "error" text,
+  "wakeup_request_id" text,
+  "exit_code" integer,
+  "signal" text,
+  "usage_json" text,
+  "result_json" text,
+  "session_id_before" text,
+  "session_id_after" text,
+  "log_store" text,
+  "log_ref" text,
+  "log_bytes" integer,
+  "log_sha256" text,
+  "log_compressed" integer NOT NULL DEFAULT 0,
+  "stdout_excerpt" text,
+  "stderr_excerpt" text,
+  "error_code" text,
+  "external_run_id" text,
+  "context_snapshot" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("wakeup_request_id") REFERENCES "agent_wakeup_requests"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "invites" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text,
+  "invite_type" text NOT NULL DEFAULT 'company_join',
+  "token_hash" text NOT NULL,
+  "allowed_join_types" text NOT NULL DEFAULT 'both',
+  "defaults_payload" text,
+  "expires_at" text NOT NULL,
+  "invited_by_user_id" text,
+  "revoked_at" text,
+  "accepted_at" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "issue_approvals" (
+  "company_id" text NOT NULL,
+  "issue_id" text NOT NULL,
+  "approval_id" text NOT NULL,
+  "linked_by_agent_id" text,
+  "linked_by_user_id" text,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id") ON DELETE cascade,
+  FOREIGN KEY ("approval_id") REFERENCES "approvals"("id") ON DELETE cascade,
+  FOREIGN KEY ("linked_by_agent_id") REFERENCES "agents"("id") ON DELETE set null
+)`,
+    `CREATE TABLE IF NOT EXISTS "issue_attachments" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "issue_id" text NOT NULL,
+  "asset_id" text NOT NULL,
+  "issue_comment_id" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id") ON DELETE cascade,
+  FOREIGN KEY ("asset_id") REFERENCES "assets"("id") ON DELETE cascade,
+  FOREIGN KEY ("issue_comment_id") REFERENCES "issue_comments"("id") ON DELETE set null
+)`,
+    `CREATE TABLE IF NOT EXISTS "issue_comments" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "issue_id" text NOT NULL,
+  "author_agent_id" text,
+  "author_user_id" text,
+  "body" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id"),
+  FOREIGN KEY ("author_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "issue_labels" (
+  "issue_id" text NOT NULL,
+  "label_id" text NOT NULL,
+  "company_id" text NOT NULL,
+  "created_at" text NOT NULL,
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id") ON DELETE cascade,
+  FOREIGN KEY ("label_id") REFERENCES "labels"("id") ON DELETE cascade,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE cascade
+)`,
+    `CREATE TABLE IF NOT EXISTS "issue_read_states" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "issue_id" text NOT NULL,
+  "user_id" text NOT NULL,
+  "last_read_at" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("issue_id") REFERENCES "issues"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "issues" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "project_id" text,
+  "goal_id" text,
+  "parent_id" text,
+  "title" text NOT NULL,
+  "description" text,
+  "status" text NOT NULL DEFAULT 'backlog',
+  "priority" text NOT NULL DEFAULT 'medium',
+  "assignee_agent_id" text,
+  "assignee_user_id" text,
+  "checkout_run_id" text,
+  "execution_run_id" text,
+  "execution_agent_name_key" text,
+  "execution_locked_at" text,
+  "created_by_agent_id" text,
+  "created_by_user_id" text,
+  "issue_number" integer,
+  "identifier" text,
+  "request_depth" integer NOT NULL DEFAULT 0,
+  "billing_code" text,
+  "assignee_adapter_overrides" text,
+  "started_at" text,
+  "completed_at" text,
+  "cancelled_at" text,
+  "hidden_at" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("project_id") REFERENCES "projects"("id"),
+  FOREIGN KEY ("goal_id") REFERENCES "goals"("id"),
+  FOREIGN KEY ("parent_id") REFERENCES "issues"("id"),
+  FOREIGN KEY ("assignee_agent_id") REFERENCES "agents"("id"),
+  FOREIGN KEY ("checkout_run_id") REFERENCES "heartbeat_runs"("id") ON DELETE set null,
+  FOREIGN KEY ("execution_run_id") REFERENCES "heartbeat_runs"("id") ON DELETE set null,
+  FOREIGN KEY ("created_by_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "join_requests" (
+  "id" text PRIMARY KEY NOT NULL,
+  "invite_id" text NOT NULL,
+  "company_id" text NOT NULL,
+  "request_type" text NOT NULL,
+  "status" text NOT NULL DEFAULT 'pending_approval',
+  "request_ip" text NOT NULL,
+  "requesting_user_id" text,
+  "request_email_snapshot" text,
+  "agent_name" text,
+  "adapter_type" text,
+  "capabilities" text,
+  "agent_defaults_payload" text,
+  "claim_secret_hash" text,
+  "claim_secret_expires_at" text,
+  "claim_secret_consumed_at" text,
+  "created_agent_id" text,
+  "approved_by_user_id" text,
+  "approved_at" text,
+  "rejected_by_user_id" text,
+  "rejected_at" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("invite_id") REFERENCES "invites"("id"),
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("created_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "labels" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "name" text NOT NULL,
+  "color" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE cascade
+)`,
+    `CREATE TABLE IF NOT EXISTS "principal_permission_grants" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "principal_type" text NOT NULL,
+  "principal_id" text NOT NULL,
+  "permission_key" text NOT NULL,
+  "scope" text,
+  "granted_by_user_id" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "project_goals" (
+  "project_id" text NOT NULL,
+  "goal_id" text NOT NULL,
+  "company_id" text NOT NULL,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE cascade,
+  FOREIGN KEY ("goal_id") REFERENCES "goals"("id") ON DELETE cascade,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id")
+)`,
+    `CREATE TABLE IF NOT EXISTS "project_workspaces" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "project_id" text NOT NULL,
+  "name" text NOT NULL,
+  "cwd" text,
+  "repo_url" text,
+  "repo_ref" text,
+  "metadata" text,
+  "is_primary" integer NOT NULL DEFAULT 0,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("project_id") REFERENCES "projects"("id") ON DELETE cascade
+)`,
+    `CREATE TABLE IF NOT EXISTS "projects" (
+  "id" text PRIMARY KEY NOT NULL,
+  "company_id" text NOT NULL,
+  "goal_id" text,
+  "name" text NOT NULL,
+  "description" text,
+  "status" text NOT NULL DEFAULT 'backlog',
+  "lead_agent_id" text,
+  "target_date" text,
+  "color" text,
+  "archived_at" text,
+  "created_at" text NOT NULL,
+  "updated_at" text NOT NULL,
+  FOREIGN KEY ("company_id") REFERENCES "companies"("id"),
+  FOREIGN KEY ("goal_id") REFERENCES "goals"("id"),
+  FOREIGN KEY ("lead_agent_id") REFERENCES "agents"("id")
+)`,
+    `CREATE INDEX IF NOT EXISTS "activity_log_company_created_idx" ON "activity_log" ("company_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "activity_log_entity_type_id_idx" ON "activity_log" ("entity_type", "entity_id")`,
+    `CREATE INDEX IF NOT EXISTS "activity_log_run_id_idx" ON "activity_log" ("run_id")`,
+    `CREATE INDEX IF NOT EXISTS "agent_api_keys_company_agent_idx" ON "agent_api_keys" ("company_id", "agent_id")`,
+    `CREATE INDEX IF NOT EXISTS "agent_api_keys_key_hash_idx" ON "agent_api_keys" ("key_hash")`,
+    `CREATE INDEX IF NOT EXISTS "agent_config_revisions_agent_created_idx" ON "agent_config_revisions" ("agent_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "agent_config_revisions_company_agent_created_idx" ON "agent_config_revisions" ("company_id", "agent_id", "created_at")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "agent_task_sessions_company_agent_adapter_task_uniq" ON "agent_task_sessions" ("company_id", "agent_id", "adapter_type", "task_key")`,
+    `CREATE INDEX IF NOT EXISTS "agent_task_sessions_company_agent_updated_idx" ON "agent_task_sessions" ("company_id", "agent_id", "updated_at")`,
+    `CREATE INDEX IF NOT EXISTS "agent_task_sessions_company_task_updated_idx" ON "agent_task_sessions" ("company_id", "task_key", "updated_at")`,
+    `CREATE INDEX IF NOT EXISTS "agent_wakeup_requests_agent_requested_idx" ON "agent_wakeup_requests" ("agent_id", "requested_at")`,
+    `CREATE INDEX IF NOT EXISTS "agent_wakeup_requests_company_agent_status_idx" ON "agent_wakeup_requests" ("company_id", "agent_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "agent_wakeup_requests_company_requested_idx" ON "agent_wakeup_requests" ("company_id", "requested_at")`,
+    `CREATE INDEX IF NOT EXISTS "approval_comments_approval_created_idx" ON "approval_comments" ("approval_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "approval_comments_approval_idx" ON "approval_comments" ("approval_id")`,
+    `CREATE INDEX IF NOT EXISTS "approval_comments_company_idx" ON "approval_comments" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "approvals_company_status_type_idx" ON "approvals" ("company_id", "status", "type")`,
+    `CREATE INDEX IF NOT EXISTS "assets_company_created_idx" ON "assets" ("company_id", "created_at")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "assets_company_object_key_uq" ON "assets" ("company_id", "object_key")`,
+    `CREATE INDEX IF NOT EXISTS "assets_company_provider_idx" ON "assets" ("company_id", "provider")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "companies_issue_prefix_idx" ON "companies" ("issue_prefix")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "company_memberships_company_principal_unique_idx" ON "company_memberships" ("company_id", "principal_type", "principal_id")`,
+    `CREATE INDEX IF NOT EXISTS "company_memberships_company_status_idx" ON "company_memberships" ("company_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "company_memberships_principal_status_idx" ON "company_memberships" ("principal_type", "principal_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "company_secret_versions_secret_idx" ON "company_secret_versions" ("secret_id", "created_at")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "company_secret_versions_secret_version_uq" ON "company_secret_versions" ("secret_id", "version")`,
+    `CREATE INDEX IF NOT EXISTS "company_secret_versions_value_sha256_idx" ON "company_secret_versions" ("value_sha256")`,
+    `CREATE INDEX IF NOT EXISTS "company_secrets_company_idx" ON "company_secrets" ("company_id")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "company_secrets_company_name_uq" ON "company_secrets" ("company_id", "name")`,
+    `CREATE INDEX IF NOT EXISTS "company_secrets_company_provider_idx" ON "company_secrets" ("company_id", "provider")`,
+    `CREATE INDEX IF NOT EXISTS "cost_events_company_agent_occurred_idx" ON "cost_events" ("company_id", "agent_id", "occurred_at")`,
+    `CREATE INDEX IF NOT EXISTS "cost_events_company_occurred_idx" ON "cost_events" ("company_id", "occurred_at")`,
+    `CREATE INDEX IF NOT EXISTS "goals_company_idx" ON "goals" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "heartbeat_run_events_company_created_idx" ON "heartbeat_run_events" ("company_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "heartbeat_run_events_company_run_idx" ON "heartbeat_run_events" ("company_id", "run_id")`,
+    `CREATE INDEX IF NOT EXISTS "heartbeat_run_events_run_seq_idx" ON "heartbeat_run_events" ("run_id", "seq")`,
+    `CREATE INDEX IF NOT EXISTS "heartbeat_runs_company_agent_started_idx" ON "heartbeat_runs" ("company_id", "agent_id", "started_at")`,
+    `CREATE INDEX IF NOT EXISTS "instance_user_roles_role_idx" ON "instance_user_roles" ("role")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "instance_user_roles_user_role_unique_idx" ON "instance_user_roles" ("user_id", "role")`,
+    `CREATE INDEX IF NOT EXISTS "invites_company_invite_state_idx" ON "invites" ("company_id", "invite_type", "revoked_at", "expires_at")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "invites_token_hash_unique_idx" ON "invites" ("token_hash")`,
+    `CREATE INDEX IF NOT EXISTS "issue_approvals_approval_idx" ON "issue_approvals" ("approval_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_approvals_company_idx" ON "issue_approvals" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_approvals_issue_idx" ON "issue_approvals" ("issue_id")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "issue_attachments_asset_uq" ON "issue_attachments" ("asset_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_attachments_company_issue_idx" ON "issue_attachments" ("company_id", "issue_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_attachments_issue_comment_idx" ON "issue_attachments" ("issue_comment_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_comments_company_author_issue_created_at_idx" ON "issue_comments" ("company_id", "author_user_id", "issue_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "issue_comments_company_idx" ON "issue_comments" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_comments_company_issue_created_at_idx" ON "issue_comments" ("company_id", "issue_id", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "issue_comments_issue_idx" ON "issue_comments" ("issue_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_labels_company_idx" ON "issue_labels" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_labels_issue_idx" ON "issue_labels" ("issue_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_labels_label_idx" ON "issue_labels" ("label_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_read_states_company_issue_idx" ON "issue_read_states" ("company_id", "issue_id")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "issue_read_states_company_issue_user_idx" ON "issue_read_states" ("company_id", "issue_id", "user_id")`,
+    `CREATE INDEX IF NOT EXISTS "issue_read_states_company_user_idx" ON "issue_read_states" ("company_id", "user_id")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_assignee_status_idx" ON "issues" ("company_id", "assignee_agent_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_assignee_user_status_idx" ON "issues" ("company_id", "assignee_user_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_parent_idx" ON "issues" ("company_id", "parent_id")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_project_idx" ON "issues" ("company_id", "project_id")`,
+    `CREATE INDEX IF NOT EXISTS "issues_company_status_idx" ON "issues" ("company_id", "status")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "issues_identifier_idx" ON "issues" ("identifier")`,
+    `CREATE INDEX IF NOT EXISTS "join_requests_company_status_type_created_idx" ON "join_requests" ("company_id", "status", "request_type", "created_at")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "join_requests_invite_unique_idx" ON "join_requests" ("invite_id")`,
+    `CREATE INDEX IF NOT EXISTS "labels_company_idx" ON "labels" ("company_id")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "labels_company_name_idx" ON "labels" ("company_id", "name")`,
+    `CREATE INDEX IF NOT EXISTS "principal_permission_grants_company_permission_idx" ON "principal_permission_grants" ("company_id", "permission_key")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "principal_permission_grants_unique_idx" ON "principal_permission_grants" ("company_id", "principal_type", "principal_id", "permission_key")`,
+    `CREATE INDEX IF NOT EXISTS "project_goals_company_idx" ON "project_goals" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "project_goals_goal_idx" ON "project_goals" ("goal_id")`,
+    `CREATE INDEX IF NOT EXISTS "project_goals_project_idx" ON "project_goals" ("project_id")`,
+    `CREATE INDEX IF NOT EXISTS "project_workspaces_company_project_idx" ON "project_workspaces" ("company_id", "project_id")`,
+    `CREATE INDEX IF NOT EXISTS "project_workspaces_project_primary_idx" ON "project_workspaces" ("project_id", "is_primary")`,
+    `CREATE INDEX IF NOT EXISTS "projects_company_idx" ON "projects" ("company_id")`,
+    `CREATE INDEX IF NOT EXISTS "agents_company_status_idx" ON "agents" ("company_id", "status")`,
+    `CREATE INDEX IF NOT EXISTS "agents_company_reports_to_idx" ON "agents" ("company_id", "reports_to")`,
+    `CREATE INDEX IF NOT EXISTS "agent_runtime_state_company_agent_idx" ON "agent_runtime_state" ("company_id", "agent_id")`,
+    `CREATE INDEX IF NOT EXISTS "agent_runtime_state_company_updated_idx" ON "agent_runtime_state" ("company_id", "updated_at")`,
+  ];
 }
 
 export type Db = ReturnType<typeof createDb>;
+
+// Re-export for compatibility with existing imports
+export type MigrationState = { status: "upToDate" };
+export async function inspectMigrations(_dbPath: string): Promise<MigrationState> {
+  return { status: "upToDate" };
+}
+export async function applyPendingMigrations(_dbPath: string): Promise<void> {}
+export async function migratePostgresIfEmpty(_url: string) {
+  return { migrated: false, reason: "sqlite-mode" as const, tableCount: 0 };
+}

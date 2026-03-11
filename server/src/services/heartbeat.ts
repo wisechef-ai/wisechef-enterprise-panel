@@ -644,7 +644,7 @@ export function heartbeatService(db: Db) {
           sessionDisplayId: input.sessionDisplayId,
           lastRunId: input.lastRunId,
           lastError: input.lastError,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(agentTaskSessions.id, existing.id))
         .returning()
@@ -713,7 +713,7 @@ export function heartbeatService(db: Db) {
   ) {
     const updated = await db
       .update(heartbeatRuns)
-      .set({ status, ...patch, updatedAt: new Date() })
+      .set({ status, ...patch, updatedAt: new Date().toISOString() })
       .where(eq(heartbeatRuns.id, runId))
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -747,7 +747,7 @@ export function heartbeatService(db: Db) {
     if (!wakeupRequestId) return;
     await db
       .update(agentWakeupRequests)
-      .set({ status, ...patch, updatedAt: new Date() })
+      .set({ status, ...patch, updatedAt: new Date().toISOString() })
       .where(eq(agentWakeupRequests.id, wakeupRequestId));
   }
 
@@ -815,7 +815,7 @@ export function heartbeatService(db: Db) {
 
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
-    const claimedAt = new Date();
+    const claimedAt = new Date().toISOString();
     const claimed = await db
       .update(heartbeatRuns)
       .set({
@@ -871,8 +871,8 @@ export function heartbeatService(db: Db) {
       .update(agents)
       .set({
         status: nextStatus,
-        lastHeartbeatAt: new Date(),
-        updatedAt: new Date(),
+        lastHeartbeatAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       })
       .where(eq(agents.id, agentId))
       .returning()
@@ -896,7 +896,7 @@ export function heartbeatService(db: Db) {
 
   async function reapOrphanedRuns(opts?: { staleThresholdMs?: number }) {
     const staleThresholdMs = opts?.staleThresholdMs ?? 0;
-    const now = new Date();
+    const now = new Date().toISOString();
 
     // Find all runs in "queued" or "running" state
     const activeRuns = await db
@@ -912,7 +912,7 @@ export function heartbeatService(db: Db) {
       // Apply staleness threshold to avoid false positives
       if (staleThresholdMs > 0) {
         const refTime = run.updatedAt ? new Date(run.updatedAt).getTime() : 0;
-        if (now.getTime() - refTime < staleThresholdMs) continue;
+        if (Date.now() - refTime < staleThresholdMs) continue;
       }
 
       await setRunStatus(run.id, "failed", {
@@ -972,7 +972,7 @@ export function heartbeatService(db: Db) {
         totalOutputTokens: sql`${agentRuntimeState.totalOutputTokens} + ${outputTokens}`,
         totalCachedInputTokens: sql`${agentRuntimeState.totalCachedInputTokens} + ${cachedInputTokens}`,
         totalCostCents: sql`${agentRuntimeState.totalCostCents} + ${additionalCostCents}`,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       })
       .where(eq(agentRuntimeState.agentId, agent.id));
 
@@ -985,7 +985,7 @@ export function heartbeatService(db: Db) {
         inputTokens,
         outputTokens,
         costCents: additionalCostCents,
-        occurredAt: new Date(),
+        occurredAt: new Date().toISOString(),
       });
     }
 
@@ -994,7 +994,7 @@ export function heartbeatService(db: Db) {
         .update(agents)
         .set({
           spentMonthlyCents: sql`${agents.spentMonthlyCents} + ${additionalCostCents}`,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(agents.id, agent.id));
     }
@@ -1052,10 +1052,10 @@ export function heartbeatService(db: Db) {
       await setRunStatus(runId, "failed", {
         error: "Agent not found",
         errorCode: "agent_not_found",
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
       });
       await setWakeupStatus(run.wakeupRequestId, "failed", {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error: "Agent not found",
       });
       const failedRun = await getRun(runId);
@@ -1148,13 +1148,13 @@ export function heartbeatService(db: Db) {
     let stderrExcerpt = "";
 
     try {
-      const startedAt = run.startedAt ?? new Date();
+      const startedAt = run.startedAt ?? new Date().toISOString();
       const runningWithSession = await db
         .update(heartbeatRuns)
         .set({
           startedAt,
           sessionIdBefore: runtimeForAdapter.sessionDisplayId ?? runtimeForAdapter.sessionId,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(heartbeatRuns.id, run.id))
         .returning()
@@ -1163,7 +1163,7 @@ export function heartbeatService(db: Db) {
 
       const runningAgent = await db
         .update(agents)
-        .set({ status: "running", updatedAt: new Date() })
+        .set({ status: "running", updatedAt: new Date().toISOString() })
         .where(eq(agents.id, agent.id))
         .returning()
         .then((rows) => rows[0] ?? null);
@@ -1199,7 +1199,7 @@ export function heartbeatService(db: Db) {
         .set({
           logStore: handle.store,
           logRef: handle.logRef,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(heartbeatRuns.id, runId));
 
@@ -1240,11 +1240,16 @@ export function heartbeatService(db: Db) {
       const mergedConfig = issueAssigneeOverrides?.adapterConfig
         ? { ...config, ...issueAssigneeOverrides.adapterConfig }
         : config;
-      const resolvedConfig = await secretsSvc.resolveAdapterConfigForRuntime(
+      const { config: resolvedConfig, secretKeys } = await secretsSvc.resolveAdapterConfigForRuntime(
         agent.companyId,
         mergedConfig,
       );
       const onAdapterMeta = async (meta: AdapterInvocationMeta) => {
+        if (meta.env && secretKeys.size > 0) {
+          for (const key of secretKeys) {
+            if (key in meta.env) meta.env[key] = "***REDACTED***";
+          }
+        }
         await appendRunEvent(currentRun, seq++, {
           eventType: "adapter.invoke",
           stream: "system",
@@ -1323,7 +1328,7 @@ export function heartbeatService(db: Db) {
           : null;
 
       await setRunStatus(run.id, status, {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error:
           outcome === "succeeded"
             ? null
@@ -1349,7 +1354,7 @@ export function heartbeatService(db: Db) {
       });
 
       await setWakeupStatus(run.wakeupRequestId, outcome === "succeeded" ? "completed" : status, {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error: adapterResult.errorMessage ?? null,
       });
 
@@ -1409,7 +1414,7 @@ export function heartbeatService(db: Db) {
       const failedRun = await setRunStatus(run.id, "failed", {
         error: message,
         errorCode: "adapter_failed",
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         stdoutExcerpt,
         stderrExcerpt,
         logBytes: logSummary?.bytes,
@@ -1417,7 +1422,7 @@ export function heartbeatService(db: Db) {
         logCompressed: logSummary?.compressed ?? false,
       });
       await setWakeupStatus(run.wakeupRequestId, "failed", {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error: message,
       });
 
@@ -1460,54 +1465,53 @@ export function heartbeatService(db: Db) {
   }
 
   async function releaseIssueExecutionAndPromote(run: typeof heartbeatRuns.$inferSelect) {
-    const promotedRun = await db.transaction(async (tx) => {
-      await tx.execute(
-        sql`select id from issues where company_id = ${run.companyId} and execution_run_id = ${run.id} for update`,
-      );
+    const promotedRun = await db.transaction((tx) => {
+      // SQLite: no row-level locking needed (file-level lock via transaction)
 
-      const issue = await tx
+      const issue = tx
         .select({
           id: issues.id,
           companyId: issues.companyId,
         })
         .from(issues)
         .where(and(eq(issues.companyId, run.companyId), eq(issues.executionRunId, run.id)))
-        .then((rows) => rows[0] ?? null);
+        .all()[0] ?? null;
 
       if (!issue) return;
 
-      await tx
+      tx
         .update(issues)
         .set({
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
-        .where(eq(issues.id, issue.id));
+        .where(eq(issues.id, issue.id))
+        .run();
 
       while (true) {
-        const deferred = await tx
+        const deferred = tx
           .select()
           .from(agentWakeupRequests)
           .where(
             and(
               eq(agentWakeupRequests.companyId, issue.companyId),
               eq(agentWakeupRequests.status, "deferred_issue_execution"),
-              sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issue.id}`,
+              sql`json_extract(${agentWakeupRequests.payload}, '$.issueId') = ${issue.id}`,
             ),
           )
           .orderBy(asc(agentWakeupRequests.requestedAt))
           .limit(1)
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!deferred) return null;
 
-        const deferredAgent = await tx
+        const deferredAgent = tx
           .select()
           .from(agents)
           .where(eq(agents.id, deferred.agentId))
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (
           !deferredAgent ||
@@ -1516,15 +1520,16 @@ export function heartbeatService(db: Db) {
           deferredAgent.status === "terminated" ||
           deferredAgent.status === "pending_approval"
         ) {
-          await tx
+          tx
             .update(agentWakeupRequests)
             .set({
               status: "failed",
-              finishedAt: new Date(),
+              finishedAt: new Date().toISOString(),
               error: "Deferred wake could not be promoted: agent is not invokable",
-              updatedAt: new Date(),
+              updatedAt: new Date().toISOString(),
             })
-            .where(eq(agentWakeupRequests.id, deferred.id));
+            .where(eq(agentWakeupRequests.id, deferred.id))
+            .run();
           continue;
         }
 
@@ -1550,9 +1555,37 @@ export function heartbeatService(db: Db) {
           payload: promotedPayload,
         });
 
-        const sessionBefore = await resolveSessionBeforeForWakeup(deferredAgent, promotedTaskKey);
-        const now = new Date();
-        const newRun = await tx
+        const sessionBefore = promotedTaskKey
+          ? (() => {
+            const codec = getAdapterSessionCodec(deferredAgent.adapterType);
+            const existingTaskSession = tx
+              .select()
+              .from(agentTaskSessions)
+              .where(
+                and(
+                  eq(agentTaskSessions.companyId, deferredAgent.companyId),
+                  eq(agentTaskSessions.agentId, deferredAgent.id),
+                  eq(agentTaskSessions.adapterType, deferredAgent.adapterType),
+                  eq(agentTaskSessions.taskKey, promotedTaskKey),
+                ),
+              )
+              .all()[0] ?? null;
+            const parsedParams = normalizeSessionParams(
+              codec.deserialize(existingTaskSession?.sessionParamsJson ?? null),
+            );
+            return truncateDisplayId(
+              existingTaskSession?.sessionDisplayId ??
+              (codec.getDisplayId ? codec.getDisplayId(parsedParams) : null) ??
+              readNonEmptyString(parsedParams?.sessionId),
+            );
+          })()
+          : tx
+              .select()
+              .from(agentRuntimeState)
+              .where(eq(agentRuntimeState.agentId, deferredAgent.id))
+              .all()[0]?.sessionId ?? null;
+        const now = new Date().toISOString();
+        const newRun = tx
           .insert(heartbeatRuns)
           .values({
             companyId: deferredAgent.companyId,
@@ -1565,9 +1598,9 @@ export function heartbeatService(db: Db) {
             sessionIdBefore: sessionBefore,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx
+        tx
           .update(agentWakeupRequests)
           .set({
             status: "queued",
@@ -1578,9 +1611,10 @@ export function heartbeatService(db: Db) {
             error: null,
             updatedAt: now,
           })
-          .where(eq(agentWakeupRequests.id, deferred.id));
+          .where(eq(agentWakeupRequests.id, deferred.id))
+          .run();
 
-        await tx
+        tx
           .update(issues)
           .set({
             executionRunId: newRun.id,
@@ -1588,7 +1622,8 @@ export function heartbeatService(db: Db) {
             executionLockedAt: now,
             updatedAt: now,
           })
-          .where(eq(issues.id, issue.id));
+          .where(eq(issues.id, issue.id))
+          .run();
 
         return newRun;
       }
@@ -1655,7 +1690,7 @@ export function heartbeatService(db: Db) {
         requestedByActorType: opts.requestedByActorType ?? null,
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
       });
     };
 
@@ -1676,12 +1711,10 @@ export function heartbeatService(db: Db) {
       const agentNameKey = normalizeAgentNameKey(agent.name);
       const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
 
-      const outcome = await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select id from issues where id = ${issueId} and company_id = ${agent.companyId} for update`,
-        );
+      const outcome = await db.transaction((tx) => {
+        // SQLite: no row-level locking needed (file-level lock via transaction)
 
-        const issue = await tx
+        const issue = tx
           .select({
             id: issues.id,
             companyId: issues.companyId,
@@ -1690,10 +1723,10 @@ export function heartbeatService(db: Db) {
           })
           .from(issues)
           .where(and(eq(issues.id, issueId), eq(issues.companyId, agent.companyId)))
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!issue) {
-          await tx.insert(agentWakeupRequests).values({
+          tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
             source,
@@ -1704,17 +1737,17 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
-            finishedAt: new Date(),
-          });
+            finishedAt: new Date().toISOString(),
+          }).run();
           return { kind: "skipped" as const };
         }
 
         let activeExecutionRun = issue.executionRunId
-          ? await tx
+          ? tx
             .select()
             .from(heartbeatRuns)
             .where(eq(heartbeatRuns.id, issue.executionRunId))
-            .then((rows) => rows[0] ?? null)
+            .all()[0] ?? null
           : null;
 
         if (activeExecutionRun && activeExecutionRun.status !== "queued" && activeExecutionRun.status !== "running") {
@@ -1722,26 +1755,27 @@ export function heartbeatService(db: Db) {
         }
 
         if (!activeExecutionRun && issue.executionRunId) {
-          await tx
+          tx
             .update(issues)
             .set({
               executionRunId: null,
               executionAgentNameKey: null,
               executionLockedAt: null,
-              updatedAt: new Date(),
+              updatedAt: new Date().toISOString(),
             })
-            .where(eq(issues.id, issue.id));
+            .where(eq(issues.id, issue.id))
+            .run();
         }
 
         if (!activeExecutionRun) {
-          const legacyRun = await tx
+          const legacyRun = tx
             .select()
             .from(heartbeatRuns)
             .where(
               and(
                 eq(heartbeatRuns.companyId, issue.companyId),
                 inArray(heartbeatRuns.status, ["queued", "running"]),
-                sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+                sql`json_extract(${heartbeatRuns.contextSnapshot}, '$.issueId') = ${issue.id}`,
               ),
             )
             .orderBy(
@@ -1749,33 +1783,34 @@ export function heartbeatService(db: Db) {
               asc(heartbeatRuns.createdAt),
             )
             .limit(1)
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
 
           if (legacyRun) {
             activeExecutionRun = legacyRun;
-            const legacyAgent = await tx
+            const legacyAgent = tx
               .select({ name: agents.name })
               .from(agents)
               .where(eq(agents.id, legacyRun.agentId))
-              .then((rows) => rows[0] ?? null);
-            await tx
+              .all()[0] ?? null;
+            tx
               .update(issues)
               .set({
                 executionRunId: legacyRun.id,
                 executionAgentNameKey: normalizeAgentNameKey(legacyAgent?.name),
-                executionLockedAt: new Date(),
-                updatedAt: new Date(),
+                executionLockedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
               })
-              .where(eq(issues.id, issue.id));
+              .where(eq(issues.id, issue.id))
+              .run();
           }
         }
 
         if (activeExecutionRun) {
-          const executionAgent = await tx
+          const executionAgent = tx
             .select({ name: agents.name })
             .from(agents)
             .where(eq(agents.id, activeExecutionRun.agentId))
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
           const executionAgentNameKey =
             normalizeAgentNameKey(issue.executionAgentNameKey) ??
             normalizeAgentNameKey(executionAgent?.name);
@@ -1791,17 +1826,17 @@ export function heartbeatService(db: Db) {
               activeExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
             );
-            const mergedRun = await tx
+            const mergedRun = tx
               .update(heartbeatRuns)
               .set({
                 contextSnapshot: mergedContextSnapshot,
-                updatedAt: new Date(),
+                updatedAt: new Date().toISOString(),
               })
               .where(eq(heartbeatRuns.id, activeExecutionRun.id))
               .returning()
-              .then((rows) => rows[0] ?? activeExecutionRun);
+              .all()[0] ?? activeExecutionRun;
 
-            await tx.insert(agentWakeupRequests).values({
+            tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
               agentId,
               source,
@@ -1814,8 +1849,8 @@ export function heartbeatService(db: Db) {
               requestedByActorId: opts.requestedByActorId ?? null,
               idempotencyKey: opts.idempotencyKey ?? null,
               runId: mergedRun.id,
-              finishedAt: new Date(),
-            });
+              finishedAt: new Date().toISOString(),
+            }).run();
 
             return { kind: "coalesced" as const, run: mergedRun };
           }
@@ -1826,7 +1861,7 @@ export function heartbeatService(db: Db) {
             [DEFERRED_WAKE_CONTEXT_KEY]: enrichedContextSnapshot,
           };
 
-          const existingDeferred = await tx
+          const existingDeferred = tx
             .select()
             .from(agentWakeupRequests)
             .where(
@@ -1834,12 +1869,12 @@ export function heartbeatService(db: Db) {
                 eq(agentWakeupRequests.companyId, agent.companyId),
                 eq(agentWakeupRequests.agentId, agentId),
                 eq(agentWakeupRequests.status, "deferred_issue_execution"),
-                sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issue.id}`,
+                sql`json_extract(${agentWakeupRequests.payload}, '$.issueId') = ${issue.id}`,
               ),
             )
             .orderBy(asc(agentWakeupRequests.requestedAt))
             .limit(1)
-            .then((rows) => rows[0] ?? null);
+            .all()[0] ?? null;
 
           if (existingDeferred) {
             const existingDeferredPayload = parseObject(existingDeferred.payload);
@@ -1855,19 +1890,20 @@ export function heartbeatService(db: Db) {
               [DEFERRED_WAKE_CONTEXT_KEY]: mergedDeferredContext,
             };
 
-            await tx
+            tx
               .update(agentWakeupRequests)
               .set({
                 payload: mergedDeferredPayload,
                 coalescedCount: (existingDeferred.coalescedCount ?? 0) + 1,
-                updatedAt: new Date(),
+                updatedAt: new Date().toISOString(),
               })
-              .where(eq(agentWakeupRequests.id, existingDeferred.id));
+              .where(eq(agentWakeupRequests.id, existingDeferred.id))
+              .run();
 
             return { kind: "deferred" as const };
           }
 
-          await tx.insert(agentWakeupRequests).values({
+          tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
             source,
@@ -1878,12 +1914,12 @@ export function heartbeatService(db: Db) {
             requestedByActorType: opts.requestedByActorType ?? null,
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
-          });
+          }).run();
 
           return { kind: "deferred" as const };
         }
 
-        const wakeupRequest = await tx
+        const wakeupRequest = tx
           .insert(agentWakeupRequests)
           .values({
             companyId: agent.companyId,
@@ -1898,9 +1934,9 @@ export function heartbeatService(db: Db) {
             idempotencyKey: opts.idempotencyKey ?? null,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        const newRun = await tx
+        const newRun = tx
           .insert(heartbeatRuns)
           .values({
             companyId: agent.companyId,
@@ -1913,25 +1949,27 @@ export function heartbeatService(db: Db) {
             sessionIdBefore: sessionBefore,
           })
           .returning()
-          .then((rows) => rows[0]);
+          .all()[0];
 
-        await tx
+        tx
           .update(agentWakeupRequests)
           .set({
             runId: newRun.id,
-            updatedAt: new Date(),
+            updatedAt: new Date().toISOString(),
           })
-          .where(eq(agentWakeupRequests.id, wakeupRequest.id));
+          .where(eq(agentWakeupRequests.id, wakeupRequest.id))
+          .run();
 
-        await tx
+        tx
           .update(issues)
           .set({
             executionRunId: newRun.id,
             executionAgentNameKey: agentNameKey,
-            executionLockedAt: new Date(),
-            updatedAt: new Date(),
+            executionLockedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
           })
-          .where(eq(issues.id, issue.id));
+          .where(eq(issues.id, issue.id))
+          .run();
 
         return { kind: "queued" as const, run: newRun };
       });
@@ -1984,7 +2022,7 @@ export function heartbeatService(db: Db) {
         .update(heartbeatRuns)
         .set({
           contextSnapshot: mergedContextSnapshot,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
         })
         .where(eq(heartbeatRuns.id, coalescedTargetRun.id))
         .returning()
@@ -2003,7 +2041,7 @@ export function heartbeatService(db: Db) {
         requestedByActorId: opts.requestedByActorId ?? null,
         idempotencyKey: opts.idempotencyKey ?? null,
         runId: mergedRun.id,
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
       });
       return mergedRun;
     }
@@ -2046,7 +2084,7 @@ export function heartbeatService(db: Db) {
       .update(agentWakeupRequests)
       .set({
         runId: newRun.id,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       })
       .where(eq(agentWakeupRequests.id, wakeupRequest.id));
 
@@ -2130,7 +2168,7 @@ export function heartbeatService(db: Db) {
       const runtimePatch: Partial<typeof agentRuntimeState.$inferInsert> = {
         sessionId: null,
         lastError: null,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       };
       if (!taskKey) {
         runtimePatch.stateJson = {};
@@ -2252,13 +2290,13 @@ export function heartbeatService(db: Db) {
       }
 
       const cancelled = await setRunStatus(run.id, "cancelled", {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error: "Cancelled by control plane",
         errorCode: "cancelled",
       });
 
       await setWakeupStatus(run.wakeupRequestId, "cancelled", {
-        finishedAt: new Date(),
+        finishedAt: new Date().toISOString(),
         error: "Cancelled by control plane",
       });
 
@@ -2286,13 +2324,13 @@ export function heartbeatService(db: Db) {
 
       for (const run of runs) {
         await setRunStatus(run.id, "cancelled", {
-          finishedAt: new Date(),
+          finishedAt: new Date().toISOString(),
           error: "Cancelled due to agent pause",
           errorCode: "cancelled",
         });
 
         await setWakeupStatus(run.wakeupRequestId, "cancelled", {
-          finishedAt: new Date(),
+          finishedAt: new Date().toISOString(),
           error: "Cancelled due to agent pause",
         });
 

@@ -31,6 +31,15 @@ interface ProjectWithGoals extends ProjectRow {
   primaryWorkspace: ProjectWorkspace | null;
 }
 
+interface ProjectShortnameRow {
+  id: string;
+  name: string;
+}
+
+interface ResolveProjectNameOptions {
+  excludeProjectId?: string | null;
+}
+
 /** Batch-load goal refs for a set of projects. */
 async function attachGoals(db: Db, rows: ProjectRow[]): Promise<ProjectWithGoals[]> {
   if (rows.length === 0) return [];
@@ -192,7 +201,35 @@ function deriveWorkspaceName(input: {
   return "Workspace";
 }
 
-async function ensureSinglePrimaryWorkspace(
+export function resolveProjectNameForUniqueShortname(
+  requestedName: string,
+  existingProjects: ProjectShortnameRow[],
+  options?: ResolveProjectNameOptions,
+): string {
+  const requestedShortname = normalizeProjectUrlKey(requestedName);
+  if (!requestedShortname) return requestedName;
+
+  const usedShortnames = new Set(
+    existingProjects
+      .filter((project) => !(options?.excludeProjectId && project.id === options.excludeProjectId))
+      .map((project) => normalizeProjectUrlKey(project.name))
+      .filter((value): value is string => value !== null),
+  );
+  if (!usedShortnames.has(requestedShortname)) return requestedName;
+
+  for (let suffix = 2; suffix < 10_000; suffix += 1) {
+    const candidateName = `${requestedName} ${suffix}`;
+    const candidateShortname = normalizeProjectUrlKey(candidateName);
+    if (candidateShortname && !usedShortnames.has(candidateShortname)) {
+      return candidateName;
+    }
+  }
+
+  // Fallback guard for pathological naming collisions.
+  return `${requestedName} ${Date.now()}`;
+}
+
+function ensureSinglePrimaryWorkspace(
   dbOrTx: any,
   input: {
     companyId: string;
@@ -200,26 +237,28 @@ async function ensureSinglePrimaryWorkspace(
     keepWorkspaceId: string;
   },
 ) {
-  await dbOrTx
+  dbOrTx
     .update(projectWorkspaces)
-    .set({ isPrimary: false, updatedAt: new Date() })
+    .set({ isPrimary: false, updatedAt: new Date().toISOString() })
     .where(
       and(
         eq(projectWorkspaces.companyId, input.companyId),
         eq(projectWorkspaces.projectId, input.projectId),
       ),
-    );
+    )
+    .run();
 
-  await dbOrTx
+  dbOrTx
     .update(projectWorkspaces)
-    .set({ isPrimary: true, updatedAt: new Date() })
+    .set({ isPrimary: true, updatedAt: new Date().toISOString() })
     .where(
       and(
         eq(projectWorkspaces.companyId, input.companyId),
         eq(projectWorkspaces.projectId, input.projectId),
         eq(projectWorkspaces.id, input.keepWorkspaceId),
       ),
-    );
+    )
+    .run();
 }
 
 export function projectService(db: Db) {
@@ -271,6 +310,12 @@ export function projectService(db: Db) {
         projectData.color = nextColor;
       }
 
+      const existingProjects = await db
+        .select({ id: projects.id, name: projects.name })
+        .from(projects)
+        .where(eq(projects.companyId, companyId));
+      projectData.name = resolveProjectNameForUniqueShortname(projectData.name, existingProjects);
+
       // Also write goalId to the legacy column (first goal or null)
       const legacyGoalId = ids && ids.length > 0 ? ids[0] : projectData.goalId ?? null;
 
@@ -295,11 +340,31 @@ export function projectService(db: Db) {
     ): Promise<ProjectWithGoals | null> => {
       const { goalIds: inputGoalIds, ...projectData } = data;
       const ids = resolveGoalIds({ goalIds: inputGoalIds, goalId: projectData.goalId });
+      const existingProject = await db
+        .select({ id: projects.id, companyId: projects.companyId, name: projects.name })
+        .from(projects)
+        .where(eq(projects.id, id))
+        .then((rows) => rows[0] ?? null);
+      if (!existingProject) return null;
+
+      if (projectData.name !== undefined) {
+        const existingShortname = normalizeProjectUrlKey(existingProject.name);
+        const nextShortname = normalizeProjectUrlKey(projectData.name);
+        if (existingShortname !== nextShortname) {
+          const existingProjects = await db
+            .select({ id: projects.id, name: projects.name })
+            .from(projects)
+            .where(eq(projects.companyId, existingProject.companyId));
+          projectData.name = resolveProjectNameForUniqueShortname(projectData.name, existingProjects, {
+            excludeProjectId: id,
+          });
+        }
+      }
 
       // Keep legacy goalId column in sync
       const updates: Partial<typeof projects.$inferInsert> = {
         ...projectData,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       };
       if (ids !== undefined) {
         updates.goalId = ids.length > 0 ? ids[0] : null;
@@ -370,20 +435,21 @@ export function projectService(db: Db) {
         .then((rows) => rows);
 
       const shouldBePrimary = data.isPrimary === true || existing.length === 0;
-      const created = await db.transaction(async (tx) => {
+      const created = await db.transaction((tx) => {
         if (shouldBePrimary) {
-          await tx
+          tx
             .update(projectWorkspaces)
-            .set({ isPrimary: false, updatedAt: new Date() })
+            .set({ isPrimary: false, updatedAt: new Date().toISOString() })
             .where(
               and(
                 eq(projectWorkspaces.companyId, project.companyId),
                 eq(projectWorkspaces.projectId, projectId),
               ),
-            );
+            )
+            .run();
         }
 
-        const row = await tx
+        const row = tx
           .insert(projectWorkspaces)
           .values({
             companyId: project.companyId,
@@ -396,7 +462,7 @@ export function projectService(db: Db) {
             isPrimary: shouldBePrimary,
           })
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         return row;
       });
 
@@ -431,7 +497,7 @@ export function projectService(db: Db) {
       if (!nextCwd && !nextRepoUrl) return null;
 
       const patch: Partial<typeof projectWorkspaces.$inferInsert> = {
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString(),
       };
       if (data.name !== undefined) patch.name = deriveWorkspaceName({ name: data.name, cwd: nextCwd, repoUrl: nextRepoUrl });
       if (data.name === undefined && (data.cwd !== undefined || data.repoUrl !== undefined)) {
@@ -442,33 +508,34 @@ export function projectService(db: Db) {
       if (data.repoRef !== undefined) patch.repoRef = readNonEmptyString(data.repoRef);
       if (data.metadata !== undefined) patch.metadata = data.metadata;
 
-      const updated = await db.transaction(async (tx) => {
+      const updated = await db.transaction((tx) => {
         if (data.isPrimary === true) {
-          await tx
+          tx
             .update(projectWorkspaces)
-            .set({ isPrimary: false, updatedAt: new Date() })
+            .set({ isPrimary: false, updatedAt: new Date().toISOString() })
             .where(
               and(
                 eq(projectWorkspaces.companyId, existing.companyId),
                 eq(projectWorkspaces.projectId, projectId),
               ),
-            );
+            )
+            .run();
           patch.isPrimary = true;
         } else if (data.isPrimary === false) {
           patch.isPrimary = false;
         }
 
-        const row = await tx
+        const row = tx
           .update(projectWorkspaces)
           .set(patch)
           .where(eq(projectWorkspaces.id, workspaceId))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         if (!row) return null;
 
         if (row.isPrimary) return row;
 
-        const hasPrimary = await tx
+        const hasPrimary = tx
           .select({ id: projectWorkspaces.id })
           .from(projectWorkspaces)
           .where(
@@ -478,10 +545,10 @@ export function projectService(db: Db) {
               eq(projectWorkspaces.isPrimary, true),
             ),
           )
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (!hasPrimary) {
-          const nextPrimaryCandidate = await tx
+          const nextPrimaryCandidate = tx
             .select({ id: projectWorkspaces.id })
             .from(projectWorkspaces)
             .where(
@@ -491,8 +558,8 @@ export function projectService(db: Db) {
                 eq(projectWorkspaces.id, row.id),
               ),
             )
-            .then((rows) => rows[0] ?? null);
-          const alternateCandidate = await tx
+            .all()[0] ?? null;
+          const alternateCandidate = tx
             .select({ id: projectWorkspaces.id })
             .from(projectWorkspaces)
             .where(
@@ -502,18 +569,19 @@ export function projectService(db: Db) {
               ),
             )
             .orderBy(asc(projectWorkspaces.createdAt), asc(projectWorkspaces.id))
-            .then((rows) => rows.find((candidate) => candidate.id !== row.id) ?? null);
+            .all()
+            .find((candidate) => candidate.id !== row.id) ?? null;
 
-          await ensureSinglePrimaryWorkspace(tx, {
+          ensureSinglePrimaryWorkspace(tx, {
             companyId: row.companyId,
             projectId: row.projectId,
             keepWorkspaceId: alternateCandidate?.id ?? nextPrimaryCandidate?.id ?? row.id,
           });
-          const refreshed = await tx
+          const refreshed = tx
             .select()
             .from(projectWorkspaces)
             .where(eq(projectWorkspaces.id, row.id))
-            .then((rows) => rows[0] ?? row);
+            .all()[0] ?? row;
           return refreshed;
         }
 
@@ -536,17 +604,17 @@ export function projectService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (!existing) return null;
 
-      const removed = await db.transaction(async (tx) => {
-        const row = await tx
+      const removed = await db.transaction((tx) => {
+        const row = tx
           .delete(projectWorkspaces)
           .where(eq(projectWorkspaces.id, workspaceId))
           .returning()
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
         if (!row) return null;
 
         if (!row.isPrimary) return row;
 
-        const next = await tx
+        const next = tx
           .select()
           .from(projectWorkspaces)
           .where(
@@ -557,10 +625,10 @@ export function projectService(db: Db) {
           )
           .orderBy(asc(projectWorkspaces.createdAt), asc(projectWorkspaces.id))
           .limit(1)
-          .then((rows) => rows[0] ?? null);
+          .all()[0] ?? null;
 
         if (next) {
-          await ensureSinglePrimaryWorkspace(tx, {
+          ensureSinglePrimaryWorkspace(tx, {
             companyId: row.companyId,
             projectId: row.projectId,
             keepWorkspaceId: next.id,

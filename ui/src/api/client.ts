@@ -1,4 +1,7 @@
-const BASE = "/api";
+// When served under /enterprise/, API calls go to /enterprise/api/* (proxied by board)
+// When served standalone, API calls go to /api/*
+const basePath = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+const BASE = `${basePath}/api`;
 
 export class ApiError extends Error {
   status: number;

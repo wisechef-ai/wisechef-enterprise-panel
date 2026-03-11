@@ -40,8 +40,8 @@ export interface IssueLabel {
   companyId: string;
   name: string;
   color: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface IssueAssigneeAdapterOverrides {
@@ -65,7 +65,7 @@ export interface Issue {
   checkoutRunId: string | null;
   executionRunId: string | null;
   executionAgentNameKey: string | null;
-  executionLockedAt: Date | null;
+  executionLockedAt: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
   issueNumber: number | null;
@@ -73,17 +73,20 @@ export interface Issue {
   requestDepth: number;
   billingCode: string | null;
   assigneeAdapterOverrides: IssueAssigneeAdapterOverrides | null;
-  startedAt: Date | null;
-  completedAt: Date | null;
-  cancelledAt: Date | null;
-  hiddenAt: Date | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  hiddenAt: string | null;
   labelIds?: string[];
   labels?: IssueLabel[];
   project?: Project | null;
   goal?: Goal | null;
   mentionedProjects?: Project[];
-  createdAt: Date;
-  updatedAt: Date;
+  myLastTouchAt?: string | null;
+  lastExternalCommentAt?: string | null;
+  isUnreadForMe?: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface IssueComment {
@@ -93,8 +96,8 @@ export interface IssueComment {
   authorAgentId: string | null;
   authorUserId: string | null;
   body: string;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface IssueAttachment {
@@ -111,7 +114,7 @@ export interface IssueAttachment {
   originalFilename: string | null;
   createdByAgentId: string | null;
   createdByUserId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;
+  updatedAt: string;
   contentPath: string;
 }
