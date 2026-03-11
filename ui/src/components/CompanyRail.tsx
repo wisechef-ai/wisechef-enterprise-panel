@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Paperclip, Plus, User } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import {
   DndContext,
@@ -155,7 +155,7 @@ function SortableCompanyItem({
 export function CompanyRail() {
   const { companies, selectedCompanyId, setSelectedCompanyId } = useCompany();
   const { openOnboarding } = useDialog();
-  const { view, setView } = useWorkspace();
+  const { setView } = useWorkspace();
   const sidebarCompanies = useMemo(
     () => companies.filter((company) => company.status !== "archived"),
     [companies],
@@ -264,48 +264,16 @@ export function CompanyRail() {
 
   return (
     <div className="flex flex-col items-center w-[72px] shrink-0 h-full bg-background border-r border-border">
-      {/* WiseChef icon - aligned with top sections (implied line, no visible border) */}
+      {/* WiseChef icon */}
       <div className="flex items-center justify-center h-12 w-full shrink-0">
-        <Paperclip className="h-5 w-5 text-foreground" />
+        <svg className="h-5 w-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M6 13c0 2 2 6 6 6s6-4 6-6" />
+          <path d="M12 19v2" />
+          <path d="M8 21h8" />
+          <path d="M3 7c0-1.1.9-2 2-2h14a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+          <path d="M12 10v3" />
+        </svg>
       </div>
-
-      {/* Personal workspace icon */}
-      <div className="flex items-center justify-center py-1 w-full shrink-0">
-        <Tooltip delayDuration={300}>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => setView("personal")}
-              className="relative flex items-center justify-center group"
-            >
-              {/* Selection indicator pill */}
-              <div
-                className={cn(
-                  "absolute left-[-14px] w-1 rounded-r-full bg-foreground transition-[height] duration-150",
-                  view === "personal"
-                    ? "h-5"
-                    : "h-0 group-hover:h-2"
-                )}
-              />
-              <div
-                className={cn(
-                  "flex items-center justify-center w-11 h-11 bg-gradient-to-br from-amber-500/20 to-amber-600/10 border border-amber-500/30 transition-[border-radius] duration-150",
-                  view === "personal"
-                    ? "rounded-[14px]"
-                    : "rounded-[22px] group-hover:rounded-[14px]",
-                )}
-              >
-                <User className="h-5 w-5 text-amber-500" />
-              </div>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            <p>Personal Assistant</p>
-          </TooltipContent>
-        </Tooltip>
-      </div>
-
-      {/* Separator between personal and companies */}
-      <div className="w-8 h-px bg-border mx-auto shrink-0" />
 
       {/* Company list */}
       <div className="flex-1 flex flex-col items-center gap-2 py-3 w-full overflow-y-auto overflow-x-hidden scrollbar-none">
@@ -322,7 +290,7 @@ export function CompanyRail() {
               <SortableCompanyItem
                 key={company.id}
                 company={company}
-                isSelected={view === "company" && company.id === selectedCompanyId}
+                isSelected={company.id === selectedCompanyId}
                 hasLiveAgents={hasLiveAgentsByCompanyId.get(company.id) ?? false}
                 hasUnreadInbox={hasUnreadInboxByCompanyId.get(company.id) ?? false}
                 onSelect={() => {
