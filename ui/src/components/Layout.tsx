@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type UIEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Moon, Sun } from "lucide-react";
+import { BookOpen, Moon, Sun, ArrowLeft } from "lucide-react";
 import { Outlet, useLocation, useNavigate, useParams } from "@/lib/router";
 import { CompanyRail } from "./CompanyRail";
 import { Sidebar } from "./Sidebar";
@@ -291,6 +291,16 @@ export function Layout() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 h-full">
+        {/* Back to Dashboard banner */}
+        <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-orange-500/10 to-transparent border-b border-border shrink-0">
+          <a
+            href="/"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-orange-500 hover:text-orange-400 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </a>
+        </div>
         {isPersonal ? (
           <PersonalBoardView />
         ) : (
