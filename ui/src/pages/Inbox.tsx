@@ -11,12 +11,14 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
-import { StatusIcon } from "../components/StatusIcon";
-import { PriorityIcon } from "../components/PriorityIcon";
+import { createIssueDetailLocationState } from "../lib/issueDetailBreadcrumb";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { ApprovalCard } from "../components/ApprovalCard";
+import { IssueRow } from "../components/IssueRow";
+import { PriorityIcon } from "../components/PriorityIcon";
+import { StatusIcon } from "../components/StatusIcon";
 import { StatusBadge } from "../components/StatusBadge";
+import { approvalLabel, defaultTypeIcon, typeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -31,70 +33,36 @@ import {
 import {
   Inbox as InboxIcon,
   AlertTriangle,
-  Clock,
-  ArrowUpRight,
   XCircle,
-  UserCheck,
+  X,
   RotateCcw,
 } from "lucide-react";
-import { Identity } from "../components/Identity";
 import { PageTabBar } from "../components/PageTabBar";
-import type { HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
+import type { Approval, HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
+import {
+  ACTIONABLE_APPROVAL_STATUSES,
+  getApprovalsForTab,
+  getInboxWorkItems,
+  getLatestFailedRunsByAgent,
+  getRecentTouchedIssues,
+  InboxApprovalFilter,
+  saveLastInboxTab,
+  shouldShowInboxSection,
+  type InboxTab,
+} from "../lib/inbox";
+import { useDismissedInboxItems } from "../hooks/useInboxBadge";
 
-const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
-const FAILED_RUN_STATUSES = new Set(["failed", "timed_out"]);
-const ACTIONABLE_APPROVAL_STATUSES = new Set(["pending", "revision_requested"]);
-
-type InboxTab = "new" | "all";
 type InboxCategoryFilter =
   | "everything"
-  | "assigned_to_me"
+  | "issues_i_touched"
   | "join_requests"
   | "approvals"
   | "failed_runs"
-  | "alerts"
-  | "stale_work";
-type InboxApprovalFilter = "all" | "actionable" | "resolved";
+  | "alerts";
 type SectionKey =
-  | "assigned_to_me"
+  | "work_items"
   | "join_requests"
-  | "approvals"
-  | "failed_runs"
-  | "alerts"
-  | "stale_work";
-
-const RUN_SOURCE_LABELS: Record<string, string> = {
-  timer: "Scheduled",
-  assignment: "Assignment",
-  on_demand: "Manual",
-  automation: "Automation",
-};
-
-function getStaleIssues(issues: Issue[]): Issue[] {
-  const now = Date.now();
-  return issues
-    .filter(
-      (i) =>
-        ["in_progress", "todo"].includes(i.status) &&
-        now - new Date(i.updatedAt).getTime() > STALE_THRESHOLD_MS,
-    )
-    .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
-}
-
-function getLatestFailedRunsByAgent(runs: HeartbeatRun[]): HeartbeatRun[] {
-  const sorted = [...runs].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-  const latestByAgent = new Map<string, HeartbeatRun>();
-
-  for (const run of sorted) {
-    if (!latestByAgent.has(run.agentId)) {
-      latestByAgent.set(run.agentId, run);
-    }
-  }
-
-  return Array.from(latestByAgent.values()).filter((run) => FAILED_RUN_STATUSES.has(run.status));
-}
+  | "alerts";
 
 function firstNonEmptyLine(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -104,6 +72,10 @@ function firstNonEmptyLine(value: string | null | undefined): string | null {
 
 function runFailureMessage(run: HeartbeatRun): string {
   return firstNonEmptyLine(run.error) ?? firstNonEmptyLine(run.stderrExcerpt) ?? "Run exited with an error.";
+}
+
+function approvalStatusLabel(status: Approval["status"]): string {
+  return status.replaceAll("_", " ");
 }
 
 function readIssueIdFromRun(run: HeartbeatRun): string | null {
@@ -119,127 +91,192 @@ function readIssueIdFromRun(run: HeartbeatRun): string | null {
   return null;
 }
 
-function FailedRunCard({
+function FailedRunInboxRow({
   run,
   issueById,
   agentName: linkedAgentName,
+  issueLinkState,
+  onDismiss,
+  onRetry,
+  isRetrying,
 }: {
   run: HeartbeatRun;
   issueById: Map<string, Issue>;
   agentName: string | null;
+  issueLinkState: unknown;
+  onDismiss: () => void;
+  onRetry: () => void;
+  isRetrying: boolean;
 }) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const issueId = readIssueIdFromRun(run);
   const issue = issueId ? issueById.get(issueId) ?? null : null;
-  const sourceLabel = RUN_SOURCE_LABELS[run.invocationSource] ?? "Manual";
   const displayError = runFailureMessage(run);
 
-  const retryRun = useMutation({
-    mutationFn: async () => {
-      const payload: Record<string, unknown> = {};
-      const context = run.contextSnapshot as Record<string, unknown> | null;
-      if (context) {
-        if (typeof context.issueId === "string" && context.issueId) payload.issueId = context.issueId;
-        if (typeof context.taskId === "string" && context.taskId) payload.taskId = context.taskId;
-        if (typeof context.taskKey === "string" && context.taskKey) payload.taskKey = context.taskKey;
-      }
-      const result = await agentsApi.wakeup(run.agentId, {
-        source: "on_demand",
-        triggerDetail: "manual",
-        reason: "retry_failed_run",
-        payload,
-      });
-      if (!("id" in result)) {
-        throw new Error("Retry was skipped because the agent is not currently invokable.");
-      }
-      return result;
-    },
-    onSuccess: (newRun) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(run.companyId, run.agentId) });
-      navigate(`/agents/${run.agentId}/runs/${newRun.id}`);
-    },
-  });
+  return (
+    <div className="group border-b border-border px-2 py-2.5 last:border-b-0 sm:px-1 sm:pr-3 sm:py-2">
+      <div className="flex items-start gap-2 sm:items-center">
+        <Link
+          to={`/agents/${run.agentId}/runs/${run.id}`}
+          className="flex min-w-0 flex-1 items-start gap-2 no-underline text-inherit transition-colors hover:bg-accent/50"
+        >
+          <span className="hidden h-2 w-2 shrink-0 sm:inline-flex" aria-hidden="true" />
+          <span className="hidden h-3.5 w-3.5 shrink-0 sm:inline-flex" aria-hidden="true" />
+          <span className="mt-0.5 shrink-0 rounded-md bg-red-500/20 p-1.5 sm:mt-0">
+            <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="line-clamp-2 text-sm font-medium sm:truncate sm:line-clamp-none">
+              {issue ? (
+                <>
+                  <span className="font-mono text-muted-foreground mr-1.5">
+                    {issue.identifier ?? issue.id.slice(0, 8)}
+                  </span>
+                  {issue.title}
+                </>
+              ) : (
+                <>Failed run{linkedAgentName ? ` — ${linkedAgentName}` : ""}</>
+              )}
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <StatusBadge status={run.status} />
+              {linkedAgentName && issue ? <span>{linkedAgentName}</span> : null}
+              <span className="truncate max-w-[300px]">{displayError}</span>
+              <span>{timeAgo(run.createdAt)}</span>
+            </span>
+          </span>
+        </Link>
+        <div className="hidden shrink-0 items-center gap-2 sm:flex">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0 px-2.5"
+            onClick={onRetry}
+            disabled={isRetrying}
+          >
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            {isRetrying ? "Retrying…" : "Retry"}
+          </Button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2 sm:hidden">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0 px-2.5"
+          onClick={onRetry}
+          disabled={isRetrying}
+        >
+          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+          {isRetrying ? "Retrying…" : "Retry"}
+        </Button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Dismiss"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalInboxRow({
+  approval,
+  requesterName,
+  onApprove,
+  onReject,
+  isPending,
+}: {
+  approval: Approval;
+  requesterName: string | null;
+  onApprove: () => void;
+  onReject: () => void;
+  isPending: boolean;
+}) {
+  const Icon = typeIcon[approval.type] ?? defaultTypeIcon;
+  const label = approvalLabel(approval.type, approval.payload as Record<string, unknown> | null);
+  const showResolutionButtons =
+    approval.type !== "budget_override_required" &&
+    ACTIONABLE_APPROVAL_STATUSES.has(approval.status);
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-red-500/30 bg-gradient-to-br from-red-500/10 via-card to-card p-4">
-      <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-red-500/10 blur-2xl" />
-      <div className="relative space-y-3">
-        {issue ? (
-          <Link
-            to={`/issues/${issue.identifier ?? issue.id}`}
-            className="block truncate text-sm font-medium transition-colors hover:text-foreground no-underline text-inherit"
-          >
-            <span className="font-mono text-muted-foreground mr-1.5">
-              {issue.identifier ?? issue.id.slice(0, 8)}
-            </span>
-            {issue.title}
-          </Link>
-        ) : (
-          <span className="block text-sm text-muted-foreground">
-            {run.errorCode ? `Error code: ${run.errorCode}` : "No linked issue"}
+    <div className="border-b border-border px-2 py-2.5 last:border-b-0 sm:px-1 sm:pr-3 sm:py-2">
+      <div className="flex items-start gap-2 sm:items-center">
+        <Link
+          to={`/approvals/${approval.id}`}
+          className="flex min-w-0 flex-1 items-start gap-2 no-underline text-inherit transition-colors hover:bg-accent/50"
+        >
+          <span className="hidden h-2 w-2 shrink-0 sm:inline-flex" aria-hidden="true" />
+          <span className="hidden h-3.5 w-3.5 shrink-0 sm:inline-flex" aria-hidden="true" />
+          <span className="mt-0.5 shrink-0 rounded-md bg-muted p-1.5 sm:mt-0">
+            <Icon className="h-4 w-4 text-muted-foreground" />
           </span>
-        )}
-
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="rounded-md bg-red-500/20 p-1.5">
-                <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-              </span>
-              {linkedAgentName ? (
-                <Identity name={linkedAgentName} size="sm" />
-              ) : (
-                <span className="text-sm font-medium">Agent {run.agentId.slice(0, 8)}</span>
-              )}
-              <StatusBadge status={run.status} />
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {sourceLabel} run failed {timeAgo(run.createdAt)}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1">
+            <span className="line-clamp-2 text-sm font-medium sm:truncate sm:line-clamp-none">
+              {label}
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span className="capitalize">{approvalStatusLabel(approval.status)}</span>
+              {requesterName ? <span>requested by {requesterName}</span> : null}
+              <span>updated {timeAgo(approval.updatedAt)}</span>
+            </span>
+          </span>
+        </Link>
+        {showResolutionButtons ? (
+          <div className="hidden shrink-0 items-center gap-2 sm:flex">
             <Button
-              type="button"
-              variant="outline"
               size="sm"
-              className="h-8 px-2.5"
-              onClick={() => retryRun.mutate()}
-              disabled={retryRun.isPending}
+              className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+              onClick={onApprove}
+              disabled={isPending}
             >
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-              {retryRun.isPending ? "Retrying…" : "Retry"}
+              Approve
             </Button>
             <Button
-              type="button"
-              variant="outline"
+              variant="destructive"
               size="sm"
-              className="h-8 px-2.5"
-              asChild
+              className="h-8 px-3"
+              onClick={onReject}
+              disabled={isPending}
             >
-              <Link to={`/agents/${run.agentId}/runs/${run.id}`}>
-                Open run
-                <ArrowUpRight className="ml-1.5 h-3.5 w-3.5" />
-              </Link>
+              Reject
             </Button>
           </div>
-        </div>
-
-        <div className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm">
-          {displayError}
-        </div>
-
-        <div className="text-xs">
-          <span className="font-mono text-muted-foreground">run {run.id.slice(0, 8)}</span>
-        </div>
-
-        {retryRun.isError && (
-          <div className="text-xs text-destructive">
-            {retryRun.error instanceof Error ? retryRun.error.message : "Failed to retry run"}
-          </div>
-        )}
+        ) : null}
       </div>
+      {showResolutionButtons ? (
+        <div className="mt-3 flex gap-2 sm:hidden">
+          <Button
+            size="sm"
+            className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+            onClick={onApprove}
+            disabled={isPending}
+          >
+            Approve
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-8 px-3"
+            onClick={onReject}
+            disabled={isPending}
+          >
+            Reject
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -253,9 +290,19 @@ export function Inbox() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [allCategoryFilter, setAllCategoryFilter] = useState<InboxCategoryFilter>("everything");
   const [allApprovalFilter, setAllApprovalFilter] = useState<InboxApprovalFilter>("all");
+  const { dismissed, dismiss } = useDismissedInboxItems();
 
-  const pathSegment = location.pathname.split("/").pop() ?? "new";
-  const tab: InboxTab = pathSegment === "all" ? "all" : "new";
+  const pathSegment = location.pathname.split("/").pop() ?? "recent";
+  const tab: InboxTab =
+    pathSegment === "all" || pathSegment === "unread" ? pathSegment : "recent";
+  const issueLinkState = useMemo(
+    () =>
+      createIssueDetailLocationState(
+        "Inbox",
+        `${location.pathname}${location.search}${location.hash}`,
+      ),
+    [location.pathname, location.search, location.hash],
+  );
 
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -266,6 +313,10 @@ export function Inbox() {
   useEffect(() => {
     setBreadcrumbs([{ label: "Inbox" }]);
   }, [setBreadcrumbs]);
+
+  useEffect(() => {
+    saveLastInboxTab(tab);
+  }, [tab]);
 
   const {
     data: approvals,
@@ -308,14 +359,14 @@ export function Inbox() {
     enabled: !!selectedCompanyId,
   });
   const {
-    data: assignedToMeIssuesRaw = [],
-    isLoading: isAssignedToMeLoading,
+    data: touchedIssuesRaw = [],
+    isLoading: isTouchedIssuesLoading,
   } = useQuery({
-    queryKey: queryKeys.issues.listAssignedToMe(selectedCompanyId!),
+    queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId!),
     queryFn: () =>
       issuesApi.list(selectedCompanyId!, {
-        assigneeUserId: "me",
-        status: "backlog,todo,in_progress,in_review,blocked",
+        touchedByUserId: "me",
+        status: "backlog,todo,in_progress,in_review,blocked,done",
       }),
     enabled: !!selectedCompanyId,
   });
@@ -326,13 +377,14 @@ export function Inbox() {
     enabled: !!selectedCompanyId,
   });
 
-  const staleIssues = issues ? getStaleIssues(issues) : [];
-  const assignedToMeIssues = useMemo(
-    () =>
-      [...assignedToMeIssuesRaw].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      ),
-    [assignedToMeIssuesRaw],
+  const touchedIssues = useMemo(() => getRecentTouchedIssues(touchedIssuesRaw), [touchedIssuesRaw]);
+  const unreadTouchedIssues = useMemo(
+    () => touchedIssues.filter((issue) => issue.isUnreadForMe),
+    [touchedIssues],
+  );
+  const issuesToRender = useMemo(
+    () => (tab === "unread" ? unreadTouchedIssues : touchedIssues),
+    [tab, touchedIssues, unreadTouchedIssues],
   );
 
   const agentById = useMemo(() => {
@@ -348,31 +400,46 @@ export function Inbox() {
   }, [issues]);
 
   const failedRuns = useMemo(
-    () => getLatestFailedRunsByAgent(heartbeatRuns ?? []),
-    [heartbeatRuns],
+    () => getLatestFailedRunsByAgent(heartbeatRuns ?? []).filter((r) => !dismissed.has(`run:${r.id}`)),
+    [heartbeatRuns, dismissed],
   );
+  const liveIssueIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const run of heartbeatRuns ?? []) {
+      if (run.status !== "running" && run.status !== "queued") continue;
+      const issueId = readIssueIdFromRun(run);
+      if (issueId) ids.add(issueId);
+    }
+    return ids;
+  }, [heartbeatRuns]);
 
-  const allApprovals = useMemo(
+  const approvalsToRender = useMemo(
+    () => getApprovalsForTab(approvals ?? [], tab, allApprovalFilter),
+    [approvals, tab, allApprovalFilter],
+  );
+  const showJoinRequestsCategory =
+    allCategoryFilter === "everything" || allCategoryFilter === "join_requests";
+  const showTouchedCategory =
+    allCategoryFilter === "everything" || allCategoryFilter === "issues_i_touched";
+  const showApprovalsCategory =
+    allCategoryFilter === "everything" || allCategoryFilter === "approvals";
+  const showFailedRunsCategory =
+    allCategoryFilter === "everything" || allCategoryFilter === "failed_runs";
+  const showAlertsCategory = allCategoryFilter === "everything" || allCategoryFilter === "alerts";
+  const failedRunsForTab = useMemo(() => {
+    if (tab === "all" && !showFailedRunsCategory) return [];
+    return failedRuns;
+  }, [failedRuns, tab, showFailedRunsCategory]);
+
+  const workItemsToRender = useMemo(
     () =>
-      [...(approvals ?? [])].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      ),
-    [approvals],
+      getInboxWorkItems({
+        issues: tab === "all" && !showTouchedCategory ? [] : issuesToRender,
+        approvals: tab === "all" && !showApprovalsCategory ? [] : approvalsToRender,
+        failedRuns: failedRunsForTab,
+      }),
+    [approvalsToRender, issuesToRender, showApprovalsCategory, showTouchedCategory, tab, failedRunsForTab],
   );
-
-  const actionableApprovals = useMemo(
-    () => allApprovals.filter((approval) => ACTIONABLE_APPROVAL_STATUSES.has(approval.status)),
-    [allApprovals],
-  );
-
-  const filteredAllApprovals = useMemo(() => {
-    if (allApprovalFilter === "all") return allApprovals;
-
-    return allApprovals.filter((approval) => {
-      const isActionable = ACTIONABLE_APPROVAL_STATUSES.has(approval.status);
-      return allApprovalFilter === "actionable" ? isActionable : !isActionable;
-    });
-  }, [allApprovals, allApprovalFilter]);
 
   const agentName = (id: string | null) => {
     if (!id) return null;
@@ -430,60 +497,127 @@ export function Inbox() {
     },
   });
 
+  const [retryingRunIds, setRetryingRunIds] = useState<Set<string>>(new Set());
+
+  const retryRunMutation = useMutation({
+    mutationFn: async (run: HeartbeatRun) => {
+      const payload: Record<string, unknown> = {};
+      const context = run.contextSnapshot as Record<string, unknown> | null;
+      if (context) {
+        if (typeof context.issueId === "string" && context.issueId) payload.issueId = context.issueId;
+        if (typeof context.taskId === "string" && context.taskId) payload.taskId = context.taskId;
+        if (typeof context.taskKey === "string" && context.taskKey) payload.taskKey = context.taskKey;
+      }
+      const result = await agentsApi.wakeup(run.agentId, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: "retry_failed_run",
+        payload,
+      });
+      if (!("id" in result)) {
+        throw new Error("Retry was skipped because the agent is not currently invokable.");
+      }
+      return { newRun: result, originalRun: run };
+    },
+    onMutate: (run) => {
+      setRetryingRunIds((prev) => new Set(prev).add(run.id));
+    },
+    onSuccess: ({ newRun, originalRun }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(originalRun.companyId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.heartbeats(originalRun.companyId, originalRun.agentId) });
+      navigate(`/agents/${originalRun.agentId}/runs/${newRun.id}`);
+    },
+    onSettled: (_data, _error, run) => {
+      if (!run) return;
+      setRetryingRunIds((prev) => {
+        const next = new Set(prev);
+        next.delete(run.id);
+        return next;
+      });
+    },
+  });
+
+  const [fadingOutIssues, setFadingOutIssues] = useState<Set<string>>(new Set());
+
+  const invalidateInboxIssueQueries = () => {
+    if (!selectedCompanyId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.listTouchedByMe(selectedCompanyId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.issues.listUnreadTouchedByMe(selectedCompanyId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
+  };
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: string) => issuesApi.markRead(id),
+    onMutate: (id) => {
+      setFadingOutIssues((prev) => new Set(prev).add(id));
+    },
+    onSuccess: () => {
+      invalidateInboxIssueQueries();
+    },
+    onSettled: (_data, _error, id) => {
+      setTimeout(() => {
+        setFadingOutIssues((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }, 300);
+    },
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: async (issueIds: string[]) => {
+      await Promise.all(issueIds.map((issueId) => issuesApi.markRead(issueId)));
+    },
+    onMutate: (issueIds) => {
+      setFadingOutIssues((prev) => {
+        const next = new Set(prev);
+        for (const issueId of issueIds) next.add(issueId);
+        return next;
+      });
+    },
+    onSuccess: () => {
+      invalidateInboxIssueQueries();
+    },
+    onSettled: (_data, _error, issueIds) => {
+      setTimeout(() => {
+        setFadingOutIssues((prev) => {
+          const next = new Set(prev);
+          for (const issueId of issueIds) next.delete(issueId);
+          return next;
+        });
+      }, 300);
+    },
+  });
+
   if (!selectedCompanyId) {
     return <EmptyState icon={InboxIcon} message="Select a company to view inbox." />;
   }
 
   const hasRunFailures = failedRuns.length > 0;
-  const showAggregateAgentError = !!dashboard && dashboard.agents.error > 0 && !hasRunFailures;
+  const showAggregateAgentError = !!dashboard && dashboard.agents.error > 0 && !hasRunFailures && !dismissed.has("alert:agent-errors");
   const showBudgetAlert =
     !!dashboard &&
     dashboard.costs.monthBudgetCents > 0 &&
-    dashboard.costs.monthUtilizationPercent >= 80;
+    dashboard.costs.monthUtilizationPercent >= 80 &&
+    !dismissed.has("alert:budget");
   const hasAlerts = showAggregateAgentError || showBudgetAlert;
-  const hasStale = staleIssues.length > 0;
   const hasJoinRequests = joinRequests.length > 0;
-  const hasAssignedToMe = assignedToMeIssues.length > 0;
-
-  const newItemCount =
-    assignedToMeIssues.length +
-    joinRequests.length +
-    actionableApprovals.length +
-    failedRuns.length +
-    staleIssues.length +
-    (showAggregateAgentError ? 1 : 0) +
-    (showBudgetAlert ? 1 : 0);
-
-  const showJoinRequestsCategory =
-    allCategoryFilter === "everything" || allCategoryFilter === "join_requests";
-  const showAssignedCategory =
-    allCategoryFilter === "everything" || allCategoryFilter === "assigned_to_me";
-  const showApprovalsCategory = allCategoryFilter === "everything" || allCategoryFilter === "approvals";
-  const showFailedRunsCategory =
-    allCategoryFilter === "everything" || allCategoryFilter === "failed_runs";
-  const showAlertsCategory = allCategoryFilter === "everything" || allCategoryFilter === "alerts";
-  const showStaleCategory = allCategoryFilter === "everything" || allCategoryFilter === "stale_work";
-
-  const approvalsToRender = tab === "new" ? actionableApprovals : filteredAllApprovals;
-  const showAssignedSection = tab === "new" ? hasAssignedToMe : showAssignedCategory && hasAssignedToMe;
+  const showWorkItemsSection = workItemsToRender.length > 0;
   const showJoinRequestsSection =
-    tab === "new" ? hasJoinRequests : showJoinRequestsCategory && hasJoinRequests;
-  const showApprovalsSection =
-    tab === "new"
-      ? actionableApprovals.length > 0
-      : showApprovalsCategory && filteredAllApprovals.length > 0;
-  const showFailedRunsSection =
-    tab === "new" ? hasRunFailures : showFailedRunsCategory && hasRunFailures;
-  const showAlertsSection = tab === "new" ? hasAlerts : showAlertsCategory && hasAlerts;
-  const showStaleSection = tab === "new" ? hasStale : showStaleCategory && hasStale;
+    tab === "all" ? showJoinRequestsCategory && hasJoinRequests : tab === "unread" && hasJoinRequests;
+  const showAlertsSection = shouldShowInboxSection({
+    tab,
+    hasItems: hasAlerts,
+    showOnRecent: hasAlerts,
+    showOnUnread: hasAlerts,
+    showOnAll: showAlertsCategory && hasAlerts,
+  });
 
   const visibleSections = [
-    showAssignedSection ? "assigned_to_me" : null,
-    showApprovalsSection ? "approvals" : null,
-    showJoinRequestsSection ? "join_requests" : null,
-    showFailedRunsSection ? "failed_runs" : null,
     showAlertsSection ? "alerts" : null,
-    showStaleSection ? "stale_work" : null,
+    showJoinRequestsSection ? "join_requests" : null,
+    showWorkItemsSection ? "work_items" : null,
   ].filter((key): key is SectionKey => key !== null);
 
   const allLoaded =
@@ -491,37 +625,48 @@ export function Inbox() {
     !isApprovalsLoading &&
     !isDashboardLoading &&
     !isIssuesLoading &&
-    !isAssignedToMeLoading &&
+    !isTouchedIssuesLoading &&
     !isRunsLoading;
 
   const showSeparatorBefore = (key: SectionKey) => visibleSections.indexOf(key) > 0;
+  const unreadIssueIds = unreadTouchedIssues
+    .filter((issue) => !fadingOutIssues.has(issue.id))
+    .map((issue) => issue.id);
+  const canMarkAllRead = unreadIssueIds.length > 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value === "all" ? "all" : "new"}`)}>
-          <PageTabBar
-            items={[
-              {
-                value: "new",
-                label: (
-                  <>
-                    New
-                    {newItemCount > 0 && (
-                      <span className="ml-1.5 rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-500">
-                        {newItemCount}
-                      </span>
-                    )}
-                  </>
-                ),
-              },
-              { value: "all", label: "All" },
-            ]}
-          />
-        </Tabs>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
+            <PageTabBar
+              items={[
+                {
+                  value: "recent",
+                  label: "Recent",
+                },
+                { value: "unread", label: "Unread" },
+                { value: "all", label: "All" },
+              ]}
+            />
+          </Tabs>
+
+          {canMarkAllRead && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0"
+              onClick={() => markAllReadMutation.mutate(unreadIssueIds)}
+              disabled={markAllReadMutation.isPending}
+            >
+              {markAllReadMutation.isPending ? "Marking…" : "Mark all as read"}
+            </Button>
+          )}
+        </div>
 
         {tab === "all" && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             <Select
               value={allCategoryFilter}
               onValueChange={(value) => setAllCategoryFilter(value as InboxCategoryFilter)}
@@ -531,12 +676,11 @@ export function Inbox() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="everything">All categories</SelectItem>
-                <SelectItem value="assigned_to_me">Assigned to me</SelectItem>
+                <SelectItem value="issues_i_touched">My recent issues</SelectItem>
                 <SelectItem value="join_requests">Join requests</SelectItem>
                 <SelectItem value="approvals">Approvals</SelectItem>
                 <SelectItem value="failed_runs">Failed runs</SelectItem>
                 <SelectItem value="alerts">Alerts</SelectItem>
-                <SelectItem value="stale_work">Stale work</SelectItem>
               </SelectContent>
             </Select>
 
@@ -569,64 +713,97 @@ export function Inbox() {
       {allLoaded && visibleSections.length === 0 && (
         <EmptyState
           icon={InboxIcon}
-          message={tab === "new" ? "You're all caught up!" : "No inbox items match these filters."}
+          message={
+            tab === "unread"
+              ? "No new inbox items."
+              : tab === "recent"
+                ? "No recent inbox items."
+                : "No inbox items match these filters."
+          }
         />
       )}
 
-      {showAssignedSection && (
+      {showWorkItemsSection && (
         <>
-          {showSeparatorBefore("assigned_to_me") && <Separator />}
+          {showSeparatorBefore("work_items") && <Separator />}
           <div>
-            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Assigned To Me
-            </h3>
-            <div className="divide-y divide-border border border-border">
-              {assignedToMeIssues.map((issue) => (
-                <Link
-                  key={issue.id}
-                  to={`/issues/${issue.identifier ?? issue.id}`}
-                  className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 no-underline text-inherit"
-                >
-                  <UserCheck className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-                  <PriorityIcon priority={issue.priority} />
-                  <StatusIcon status={issue.status} />
-                  <span className="text-xs font-mono text-muted-foreground">
-                    {issue.identifier ?? issue.id.slice(0, 8)}
-                  </span>
-                  <span className="flex-1 truncate text-sm">{issue.title}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    updated {timeAgo(issue.updatedAt)}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
+            <div className="overflow-hidden rounded-xl border border-border bg-card">
+              {workItemsToRender.map((item) => {
+                if (item.kind === "approval") {
+                  return (
+                    <ApprovalInboxRow
+                      key={`approval:${item.approval.id}`}
+                      approval={item.approval}
+                      requesterName={agentName(item.approval.requestedByAgentId)}
+                      onApprove={() => approveMutation.mutate(item.approval.id)}
+                      onReject={() => rejectMutation.mutate(item.approval.id)}
+                      isPending={approveMutation.isPending || rejectMutation.isPending}
+                    />
+                  );
+                }
 
-      {showApprovalsSection && (
-        <>
-          {showSeparatorBefore("approvals") && <Separator />}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              {tab === "new" ? "Approvals Needing Action" : "Approvals"}
-            </h3>
-            <div className="grid gap-3">
-              {approvalsToRender.map((approval) => (
-                <ApprovalCard
-                  key={approval.id}
-                  approval={approval}
-                  requesterAgent={
-                    approval.requestedByAgentId
-                      ? (agents ?? []).find((a) => a.id === approval.requestedByAgentId) ?? null
-                      : null
-                  }
-                  onApprove={() => approveMutation.mutate(approval.id)}
-                  onReject={() => rejectMutation.mutate(approval.id)}
-                  detailLink={`/approvals/${approval.id}`}
-                  isPending={approveMutation.isPending || rejectMutation.isPending}
-                />
-              ))}
+                if (item.kind === "failed_run") {
+                  return (
+                    <FailedRunInboxRow
+                      key={`run:${item.run.id}`}
+                      run={item.run}
+                      issueById={issueById}
+                      agentName={agentName(item.run.agentId)}
+                      issueLinkState={issueLinkState}
+                      onDismiss={() => dismiss(`run:${item.run.id}`)}
+                      onRetry={() => retryRunMutation.mutate(item.run)}
+                      isRetrying={retryingRunIds.has(item.run.id)}
+                    />
+                  );
+                }
+
+                const issue = item.issue;
+                const isUnread = issue.isUnreadForMe && !fadingOutIssues.has(issue.id);
+                const isFading = fadingOutIssues.has(issue.id);
+                return (
+                  <IssueRow
+                    key={`issue:${issue.id}`}
+                    issue={issue}
+                    issueLinkState={issueLinkState}
+                    desktopMetaLeading={(
+                      <>
+                        <span className="hidden sm:inline-flex">
+                          <PriorityIcon priority={issue.priority} />
+                        </span>
+                        <span className="hidden shrink-0 sm:inline-flex">
+                          <StatusIcon status={issue.status} />
+                        </span>
+                        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                          {issue.identifier ?? issue.id.slice(0, 8)}
+                        </span>
+                        {liveIssueIds.has(issue.id) && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 sm:gap-1.5 sm:px-2">
+                            <span className="relative flex h-2 w-2">
+                              <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-blue-400 opacity-75" />
+                              <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+                            </span>
+                            <span className="hidden text-[11px] font-medium text-blue-600 dark:text-blue-400 sm:inline">
+                              Live
+                            </span>
+                          </span>
+                        )}
+                      </>
+                    )}
+                    mobileMeta={
+                      issue.lastExternalCommentAt
+                        ? `commented ${timeAgo(issue.lastExternalCommentAt)}`
+                        : `updated ${timeAgo(issue.updatedAt)}`
+                    }
+                    unreadState={isUnread ? "visible" : isFading ? "fading" : "hidden"}
+                    onMarkRead={() => markReadMutation.mutate(issue.id)}
+                    trailingMeta={
+                      issue.lastExternalCommentAt
+                        ? `commented ${timeAgo(issue.lastExternalCommentAt)}`
+                        : `updated ${timeAgo(issue.updatedAt)}`
+                    }
+                  />
+                );
+              })}
             </div>
           </div>
         </>
@@ -686,26 +863,6 @@ export function Inbox() {
         </>
       )}
 
-      {showFailedRunsSection && (
-        <>
-          {showSeparatorBefore("failed_runs") && <Separator />}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Failed Runs
-            </h3>
-            <div className="grid gap-3">
-              {failedRuns.map((run) => (
-                <FailedRunCard
-                  key={run.id}
-                  run={run}
-                  issueById={issueById}
-                  agentName={agentName(run.agentId)}
-                />
-              ))}
-            </div>
-          </div>
-        </>
-      )}
 
       {showAlertsSection && (
         <>
@@ -716,76 +873,55 @@ export function Inbox() {
             </h3>
             <div className="divide-y divide-border border border-border">
               {showAggregateAgentError && (
-                <Link
-                  to="/agents"
-                  className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 no-underline text-inherit"
-                >
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
-                  <span className="text-sm">
-                    <span className="font-medium">{dashboard!.agents.error}</span>{" "}
-                    {dashboard!.agents.error === 1 ? "agent has" : "agents have"} errors
-                  </span>
-                </Link>
+                <div className="group/alert relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
+                  <Link
+                    to="/agents"
+                    className="flex flex-1 cursor-pointer items-center gap-3 no-underline text-inherit"
+                  >
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                    <span className="text-sm">
+                      <span className="font-medium">{dashboard!.agents.error}</span>{" "}
+                      {dashboard!.agents.error === 1 ? "agent has" : "agents have"} errors
+                    </span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => dismiss("alert:agent-errors")}
+                    className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
+                    aria-label="Dismiss"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               )}
               {showBudgetAlert && (
-                <Link
-                  to="/costs"
-                  className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 no-underline text-inherit"
-                >
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-400" />
-                  <span className="text-sm">
-                    Budget at{" "}
-                    <span className="font-medium">{dashboard!.costs.monthUtilizationPercent}%</span>{" "}
-                    utilization this month
-                  </span>
-                </Link>
+                <div className="group/alert relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50">
+                  <Link
+                    to="/costs"
+                    className="flex flex-1 cursor-pointer items-center gap-3 no-underline text-inherit"
+                  >
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-yellow-400" />
+                    <span className="text-sm">
+                      Budget at{" "}
+                      <span className="font-medium">{dashboard!.costs.monthUtilizationPercent}%</span>{" "}
+                      utilization this month
+                    </span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => dismiss("alert:budget")}
+                    className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/alert:opacity-100"
+                    aria-label="Dismiss"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               )}
             </div>
           </div>
         </>
       )}
 
-      {showStaleSection && (
-        <>
-          {showSeparatorBefore("stale_work") && <Separator />}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Stale Work
-            </h3>
-            <div className="divide-y divide-border border border-border">
-              {staleIssues.map((issue) => (
-                <Link
-                  key={issue.id}
-                  to={`/issues/${issue.identifier ?? issue.id}`}
-                  className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 no-underline text-inherit"
-                >
-                  <Clock className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <PriorityIcon priority={issue.priority} />
-                  <StatusIcon status={issue.status} />
-                  <span className="text-xs font-mono text-muted-foreground">
-                    {issue.identifier ?? issue.id.slice(0, 8)}
-                  </span>
-                  <span className="flex-1 truncate text-sm">{issue.title}</span>
-                  {issue.assigneeAgentId &&
-                    (() => {
-                      const name = agentName(issue.assigneeAgentId);
-                      return name ? (
-                        <Identity name={name} size="sm" />
-                      ) : (
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {issue.assigneeAgentId.slice(0, 8)}
-                        </span>
-                      );
-                    })()}
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    updated {timeAgo(issue.updatedAt)}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
