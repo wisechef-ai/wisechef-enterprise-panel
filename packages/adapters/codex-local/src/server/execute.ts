@@ -76,7 +76,7 @@ async function resolveWiseChefSkillsDir(): Promise<string | null> {
 }
 
 async function ensureCodexSkillsInjected(onLog: AdapterExecutionContext["onLog"]) {
-  const skillsDir = await resolvePaperclipSkillsDir();
+  const skillsDir = await resolveWiseChefSkillsDir();
   if (!skillsDir) return;
 
   const skillsHome = path.join(codexHomeDir(), "skills");
