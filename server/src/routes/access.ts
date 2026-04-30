@@ -269,7 +269,12 @@ function normalizeHeaderMap(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-<<<<<<< HEAD
+function nonEmptyTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function buildJoinConnectivityDiagnostics(input: {
   deploymentMode: DeploymentMode;
   deploymentExposure: DeploymentExposure;
@@ -334,12 +339,6 @@ function buildJoinConnectivityDiagnostics(input: {
   }
 
   return diagnostics;
-=======
-function nonEmptyTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
->>>>>>> stabilization/2603
 }
 
 function headerMapHasKeyIgnoreCase(
@@ -912,11 +911,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_host_not_allowed",
       level: "warn",
       message: `Onboarding host "${apiHost}" is not in allowed hostnames for authenticated/private mode.`,
-<<<<<<< HEAD
       hint: `Run pnpm wisechef-ai allowed-hostname ${apiHost}`,
-=======
-      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`
->>>>>>> stabilization/2603
     });
   }
 
@@ -1034,16 +1029,9 @@ function buildInviteOnboardingManifest(
         connectionCandidates,
         diagnostics: discoveryDiagnostics,
         guidance:
-<<<<<<< HEAD
           opts.deploymentMode === "authenticated" && opts.deploymentExposure === "private"
             ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm wisechef-ai allowed-hostname <host>`."
             : "Ensure OpenClaw can reach this Paperclip API base URL for callbacks and claims.",
-=======
-          opts.deploymentMode === "authenticated" &&
-          opts.deploymentExposure === "private"
-            ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm paperclipai allowed-hostname <host>`."
-            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls."
->>>>>>> stabilization/2603
       },
       textInstructions: {
         path: onboardingTextPath,
