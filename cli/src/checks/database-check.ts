@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { PaperclipConfig } from "../config/schema.js";
 import type { CheckResult } from "./index.js";
+import { sql } from "drizzle-orm";
 import { resolveRuntimeLikePath } from "./path-resolver.js";
 
 export async function databaseCheck(config: PaperclipConfig, configPath?: string): Promise<CheckResult> {
@@ -18,7 +19,7 @@ export async function databaseCheck(config: PaperclipConfig, configPath?: string
     try {
       const { createDb } = await import("@paperclipai/db");
       const db = createDb(config.database.connectionString);
-      await db.execute("SELECT 1");
+      await db.run(sql`SELECT 1`);
       return {
         name: "Database",
         status: "pass",

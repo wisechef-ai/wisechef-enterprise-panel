@@ -1,6 +1,7 @@
 import * as p from "@clack/prompts";
 import path from "node:path";
 import pc from "picocolors";
+import { sql } from "drizzle-orm";
 import {
   AUTH_BASE_URL_MODES,
   DEPLOYMENT_EXPOSURES,
@@ -185,6 +186,7 @@ function quickstartDefaultsFromEnv(): {
     },
     auth: {
       baseUrlMode: authBaseUrlMode,
+      disableSignUp: false,
       ...(authPublicBaseUrl ? { publicBaseUrl: authPublicBaseUrl } : {}),
     },
     storage: {
@@ -301,7 +303,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
       try {
         const { createDb } = await import("@paperclipai/db");
         const db = createDb(database.connectionString);
-        await db.execute("SELECT 1");
+        await db.run(sql`SELECT 1`);
         s.stop("Database connection successful");
       } catch {
         s.stop(pc.yellow("Could not connect to database — you can fix this later with `wisechef-ai doctor`"));

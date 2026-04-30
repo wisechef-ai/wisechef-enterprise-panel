@@ -83,7 +83,7 @@ export async function bootstrapCeoInvite(opts: {
       return;
     }
 
-    const now = new Date();
+    const now = new Date().toISOString();
     await db
       .update(invites)
       .set({ revokedAt: now, updatedAt: now })
@@ -104,9 +104,9 @@ export async function bootstrapCeoInvite(opts: {
         inviteType: "bootstrap_ceo",
         tokenHash: hashToken(token),
         allowedJoinTypes: "human",
-        expiresAt: new Date(Date.now() + expiresHours * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + expiresHours * 60 * 60 * 1000).toISOString(),
         invitedByUserId: "system",
-      })
+      } as any)
       .returning()
       .then((rows) => rows[0]);
 
@@ -114,7 +114,7 @@ export async function bootstrapCeoInvite(opts: {
     const inviteUrl = `${baseUrl}/invite/${token}`;
     p.log.success("Created bootstrap CEO invite.");
     p.log.message(`Invite URL: ${pc.cyan(inviteUrl)}`);
-    p.log.message(`Expires: ${pc.dim(created.expiresAt.toISOString())}`);
+    p.log.message(`Expires: ${pc.dim(created.expiresAt)}`);
   } catch (err) {
     p.log.error(`Could not create bootstrap invite: ${err instanceof Error ? err.message : String(err)}`);
     p.log.info("If using embedded-postgres, start the Paperclip server and run this command again.");
