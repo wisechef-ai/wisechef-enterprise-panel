@@ -1,9 +1,11 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - master
+  # WiseChef fork: push trigger disabled — we don't publish to npm.
+  # Re-enable if fork publishing is set up with own npm scope + secrets.
+  # push:
+  #   branches:
+  #     - master
   workflow_dispatch:
     inputs:
       source_ref:
